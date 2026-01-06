@@ -1,0 +1,62 @@
+# ==========================
+# Go
+# ==========================
+# Binaries
+vastiva
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Go coverage
+*.out
+coverage.html
+
+# Go workspace
+go.work
+go.work.sum
+
+# Dependency directories
+vendor/
+
+# ==========================
+# Node.js / Frontend
+# ==========================
+web/node_modules/
+web/dist/
+web/.vite/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ==========================
+# Environment & Secrets
+# ==========================
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ==========================
+# IDE / Editor
+# ==========================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ==========================
+# Build / Cache
+# ==========================
+tmp/
+.cache/
+*.code-workspace

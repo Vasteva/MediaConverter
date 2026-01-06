@@ -1,0 +1,139 @@
+# Vastiva Media Converter - GitLab CI/CD Pipeline
+
+stages:
+  - lint
+  - test
+  - build
+  - docker
+
+variables:
+  GO_VERSION: "1.22"
+  NODE_VERSION: "20"
+  DOCKER_IMAGE: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+
+# ===================
+# Cache Configuration
+# ===================
+.go-cache: &go-cache
+  cache:
+    key: go-${CI_COMMIT_REF_SLUG}
+    paths:
+      - .go/pkg/mod/
+    policy: pull-push
+
+.node-cache: &node-cache
+  cache:
+    key: node-${CI_COMMIT_REF_SLUG}
+    paths:
+      - web/node_modules/
+    policy: pull-push
+
+# ===================
+# Lint Stage
+# ===================
+go-lint:
+  stage: lint
+  image: golang:${GO_VERSION}-alpine
+  <<: *go-cache
+  variables:
+    GOPATH: $CI_PROJECT_DIR/.go
+  before_script:
+    - go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+  script:
+    - golangci-lint run --timeout=5m ./...
+  allow_failure: true # Remove once linting issues are fixed
+
+frontend-lint:
+  stage: lint
+  image: node:${NODE_VERSION}-alpine
+  <<: *node-cache
+  script:
+    - cd web
+    - npm ci --prefer-offline
+    - npm run lint
+  allow_failure: true
+
+# ===================
+# Test Stage
+# ===================
+go-test:
+  stage: test
+  image: golang:${GO_VERSION}-alpine
+  <<: *go-cache
+  variables:
+    GOPATH: $CI_PROJECT_DIR/.go
+  script:
+    - go test -v -race -coverprofile=coverage.out ./...
+    - go tool cover -func=coverage.out
+  coverage: '/total:\s+\(statements\)\s+(\d+\.\d+)%/'
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    expire_in: 1 week
+  allow_failure: true # Remove once tests are added
+
+frontend-test:
+  stage: test
+  image: node:${NODE_VERSION}-alpine
+  <<: *node-cache
+  script:
+    - cd web
+    - npm ci --prefer-offline
+    - npm run test 2>/dev/null || echo "No tests configured yet"
+  allow_failure: true
+
+# ===================
+# Build Stage
+# ===================
+build-backend:
+  stage: build
+  image: golang:${GO_VERSION}-alpine
+  <<: *go-cache
+  variables:
+    GOPATH: $CI_PROJECT_DIR/.go
+    CGO_ENABLED: "0"
+    GOOS: linux
+  script:
+    - go build -ldflags="-s -w" -o vastiva ./cmd/server
+  artifacts:
+    paths:
+      - vastiva
+    expire_in: 1 day
+
+build-frontend:
+  stage: build
+  image: node:${NODE_VERSION}-alpine
+  <<: *node-cache
+  script:
+    - cd web
+    - npm ci --prefer-offline
+    - npm run build
+  artifacts:
+    paths:
+      - web/dist/
+    expire_in: 1 day
+
+# ===================
+# Docker Stage
+# ===================
+build-image:
+  stage: docker
+  image: docker:24
+  services:
+    - docker:24-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - docker build -t $DOCKER_IMAGE -t $CI_REGISTRY_IMAGE:latest .
+    - docker push $DOCKER_IMAGE
+    - docker push $CI_REGISTRY_IMAGE:latest
+  dependencies:
+    - build-backend
+    - build-frontend
+  only:
+    - main
+    - tags

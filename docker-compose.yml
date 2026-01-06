@@ -1,0 +1,21 @@
+services:
+  vastiva:
+    build: .
+    container_name: vastiva
+    environment:
+      - PORT=80
+      - SOURCE_DIR=/storage
+      - DEST_DIR=/output
+      - GPU_VENDOR=${GPU_VENDOR:-cpu}
+      - AI_PROVIDER=${AI_PROVIDER:-none}
+      - AI_API_KEY=${AI_API_KEY:-}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - LICENSE_KEY=${LICENSE_KEY:-}
+    volumes:
+      - ${MEDIA_ROOT:-/mnt/media}:/storage
+      - ${MEDIA_ROOT:-/mnt/media}/output:/output
+    devices:
+      - /dev/dri:/dev/dri
+    ports:
+      - "8091:80"
+    restart: unless-stopped
