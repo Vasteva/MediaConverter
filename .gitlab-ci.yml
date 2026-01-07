@@ -7,7 +7,7 @@ stages:
   - docker
 
 variables:
-  GO_VERSION: "1.22"
+  GO_VERSION: "1.23"
   NODE_VERSION: "20"
   DOCKER_IMAGE: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
 
