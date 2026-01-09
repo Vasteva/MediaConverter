@@ -3,15 +3,17 @@ import './App.css';
 import Header from './components/Header';
 import Dashboard from './components/Dashboard';
 import JobList from './components/JobList';
-import ScannerConfig from './components/ScannerConfig';
+import ScannerConfigComponent from './components/ScannerConfig';
 import Settings from './components/Settings';
-import type { Job, SystemConfig } from './types';
+import type { Job, SystemConfig, ScannerConfig, SystemStats } from './types';
 
 function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>('dark');
   const [currentView, setCurrentView] = useState<'dashboard' | 'jobs' | 'scanner' | 'settings'>('dashboard');
   const [jobs, setJobs] = useState<Job[]>([]);
   const [config, setConfig] = useState<SystemConfig | null>(null);
+  const [scannerConfig, setScannerConfig] = useState<ScannerConfig | null>(null);
+  const [stats, setStats] = useState<SystemStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   // Load theme from localStorage
@@ -31,6 +33,19 @@ function App() {
     document.documentElement.setAttribute('data-theme', newTheme);
   };
 
+  // Fetch stats from API
+  const fetchStats = async () => {
+    try {
+      const response = await fetch('/api/stats');
+      if (response.ok) {
+        const data = await response.json();
+        setStats(data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch stats:', error);
+    }
+  };
+
   // Fetch jobs from API
   const fetchJobs = async () => {
     try {
@@ -44,16 +59,24 @@ function App() {
     }
   };
 
-  // Fetch config from API
-  const fetchConfig = async () => {
+  // Fetch configs from API
+  const fetchConfigs = async () => {
     try {
-      const response = await fetch('/api/config');
-      if (response.ok) {
-        const data = await response.json();
+      const [configRes, scannerRes] = await Promise.all([
+        fetch('/api/config'),
+        fetch('/api/scanner/config')
+      ]);
+
+      if (configRes.ok) {
+        const data = await configRes.json();
         setConfig(data);
       }
+      if (scannerRes.ok) {
+        const data = await scannerRes.json();
+        setScannerConfig(data);
+      }
     } catch (error) {
-      console.error('Failed to fetch config:', error);
+      console.error('Failed to fetch configs:', error);
     } finally {
       setIsLoading(false);
     }
@@ -62,12 +85,16 @@ function App() {
   // Initial data fetch
   useEffect(() => {
     fetchJobs();
-    fetchConfig();
+    fetchConfigs();
+    fetchStats();
   }, []);
 
-  // Poll for job updates every 2 seconds
+  // Poll for updates every 2 seconds
   useEffect(() => {
-    const interval = setInterval(fetchJobs, 2000);
+    const interval = setInterval(() => {
+      fetchJobs();
+      fetchStats();
+    }, 2000);
     return () => clearInterval(interval);
   }, []);
 
@@ -107,6 +134,44 @@ function App() {
     }
   };
 
+  // Update System Config
+  const updateSystemConfig = async (newConfig: Partial<SystemConfig>) => {
+    try {
+      const response = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newConfig),
+      });
+      if (response.ok) {
+        await fetchConfigs();
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('Failed to update system config:', error);
+      return false;
+    }
+  };
+
+  // Update Scanner Config
+  const updateScannerConfig = async (newConfig: ScannerConfig) => {
+    try {
+      const response = await fetch('/api/scanner/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newConfig),
+      });
+      if (response.ok) {
+        await fetchConfigs();
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('Failed to update scanner config:', error);
+      return false;
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="loading-screen">
@@ -129,11 +194,12 @@ function App() {
         onToggleTheme={toggleTheme}
         currentView={currentView}
         onViewChange={setCurrentView}
+        isPremium={config?.isPremium}
       />
 
       <main className="main-content">
         {currentView === 'dashboard' && (
-          <Dashboard jobs={jobs} config={config} />
+          <Dashboard jobs={jobs} config={config} stats={stats} />
         )}
         {currentView === 'jobs' && (
           <JobList
@@ -142,11 +208,17 @@ function App() {
             onCancelJob={cancelJob}
           />
         )}
-        {currentView === 'scanner' && (
-          <ScannerConfig />
+        {currentView === 'scanner' && scannerConfig && (
+          <ScannerConfigComponent
+            config={scannerConfig}
+            onSave={updateScannerConfig}
+          />
         )}
         {currentView === 'settings' && (
-          <Settings config={config} onConfigUpdate={fetchConfig} />
+          <Settings
+            config={config}
+            onConfigUpdate={updateSystemConfig}
+          />
         )}
       </main>
     </div>

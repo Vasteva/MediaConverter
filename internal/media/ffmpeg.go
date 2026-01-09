@@ -2,9 +2,11 @@ package media
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -29,13 +31,14 @@ const (
 
 // TranscodeOptions contains all parameters for FFmpeg transcoding
 type TranscodeOptions struct {
-	InputPath  string
-	OutputPath string
-	GPUVendor  GPUVendor
-	Preset     QualityPreset
-	CRF        int
-	AudioCodec string // "copy", "aac", "ac3"
-	Container  string // "mkv", "mp4"
+	InputPath     string
+	OutputPath    string
+	GPUVendor     GPUVendor
+	Preset        QualityPreset
+	CRF           int
+	AudioCodec    string // "copy", "aac", "ac3"
+	Container     string // "mkv", "mp4"
+	TotalDuration float64
 }
 
 // FFmpegWrapper handles FFmpeg command execution
@@ -206,8 +209,26 @@ func (f *FFmpegWrapper) GetMediaInfo(ctx context.Context, path string) (*MediaIn
 		return nil, fmt.Errorf("ffprobe failed: %w", err)
 	}
 
-	// For now, return basic info
-	// TODO: Parse JSON output for detailed stream information
+	// Parse basic info from JSON
+	var probeData struct {
+		Format struct {
+			Duration string `json:"duration"`
+			Size     string `json:"size"`
+		} `json:"format"`
+	}
+
+	if err := json.Unmarshal(output, &probeData); err == nil {
+		duration, _ := strconv.ParseFloat(probeData.Format.Duration, 64)
+		size, _ := strconv.ParseInt(probeData.Format.Size, 10, 64)
+		return &MediaInfo{
+			Path:     path,
+			Filename: filepath.Base(path),
+			Duration: duration,
+			Size:     size,
+			RawJSON:  string(output),
+		}, nil
+	}
+
 	return &MediaInfo{
 		Path:     path,
 		Filename: filepath.Base(path),

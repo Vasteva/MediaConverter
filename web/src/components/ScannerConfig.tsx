@@ -1,52 +1,42 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import type { ScannerConfig, WatchDirectory } from '../types';
 
-interface WatchDirectory {
-    path: string;
-    recursive: boolean;
-    patterns: string[];
+interface ScannerConfigProps {
+    config: ScannerConfig;
+    onSave: (config: ScannerConfig) => Promise<boolean>;
 }
 
-interface ScannerState {
-    enabled: boolean;
-    mode: 'manual' | 'startup' | 'periodic' | 'watch' | 'hybrid';
-    intervalSec: number;
-    watchDirectories: WatchDirectory[];
-    excludePatterns: string[];
-}
-
-// Mock initial state
-const INITIAL_STATE: ScannerState = {
-    enabled: true,
-    mode: 'watch',
-    intervalSec: 300,
-    watchDirectories: [
-        { path: '/data/media/downloads', recursive: true, patterns: ['*.iso', '*.mkv'] },
-        { path: '/data/media/upload', recursive: false, patterns: ['*.mp4'] }
-    ],
-    excludePatterns: ['*.tmp', '*.part', '._*']
-};
-
-export default function ScannerConfig() {
-    const [config, setConfig] = useState<ScannerState>(INITIAL_STATE);
+export default function ScannerConfigComponent({ config: initialConfig, onSave }: ScannerConfigProps) {
+    const [config, setConfig] = useState<ScannerConfig>(initialConfig);
     const [isSaving, setIsSaving] = useState(false);
     const [newDir, setNewDir] = useState('');
 
+    // Update local state if initialConfig changes
+    useEffect(() => {
+        setConfig(initialConfig);
+    }, [initialConfig]);
+
     const handleSave = async () => {
         setIsSaving(true);
-        // Simulator API call
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await onSave(config);
         setIsSaving(false);
-        // Show success toast (todo)
     };
 
     const addWatchDir = () => {
         if (!newDir) return;
+
+        const newWatchDir: WatchDirectory = {
+            path: newDir,
+            recursive: true,
+            includePatterns: ['*'],
+            excludePatterns: [],
+            minFileSizeMB: 0,
+            minFileAgeMinutes: 0
+        };
+
         setConfig({
             ...config,
-            watchDirectories: [
-                ...config.watchDirectories,
-                { path: newDir, recursive: true, patterns: ['*'] }
-            ]
+            watchDirectories: [...config.watchDirectories, newWatchDir]
         });
         setNewDir('');
     };
@@ -103,25 +93,36 @@ export default function ScannerConfig() {
                                 <input
                                     type="number"
                                     className="input"
-                                    value={config.intervalSec}
-                                    onChange={e => setConfig({ ...config, intervalSec: parseInt(e.target.value) })}
+                                    value={config.scanIntervalSec}
+                                    onChange={e => setConfig({ ...config, scanIntervalSec: parseInt(e.target.value) })}
                                     min="60"
                                 />
                             </div>
                         )}
 
-                        <div className="form-group">
-                            <label className="label mb-2 block">Exclude Patterns (comma separated)</label>
+                        <div className="form-group mb-4">
+                            <label className="label mb-2 block">Default Priority</label>
                             <input
-                                type="text"
+                                type="number"
                                 className="input"
-                                value={config.excludePatterns.join(', ')}
-                                onChange={e => setConfig({
-                                    ...config,
-                                    excludePatterns: e.target.value.split(',').map(s => s.trim()).filter(Boolean)
-                                })}
-                                placeholder="*.tmp, *.part"
+                                value={config.defaultPriority}
+                                onChange={e => setConfig({ ...config, defaultPriority: parseInt(e.target.value) })}
+                                min="1"
+                                max="10"
                             />
+                        </div>
+
+                        <div className="form-group">
+                            <label className="label mb-2 block">Auto-Create Jobs</label>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={config.autoCreateJobs}
+                                    onChange={e => setConfig({ ...config, autoCreateJobs: e.target.checked })}
+                                    className="w-4 h-4"
+                                />
+                                <span className="text-secondary text-sm">Automatically queue jobs when files are found</span>
+                            </label>
                         </div>
                     </div>
                 </div>
@@ -152,25 +153,34 @@ export default function ScannerConfig() {
                                     <div key={index} className="flex justify-between items-start p-3 bg-tertiary rounded border border-border">
                                         <div className="flex-1">
                                             <div className="font-medium font-mono text-sm">{dir.path}</div>
-                                            <div className="flex gap-2 mt-1">
-                                                <label className="flex items-center gap-1 text-xs text-secondary cursor-pointer">
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={dir.recursive}
-                                                        onChange={() => {
-                                                            const newDirs = [...config.watchDirectories];
-                                                            newDirs[index].recursive = !newDirs[index].recursive;
-                                                            setConfig({ ...config, watchDirectories: newDirs });
-                                                        }}
-                                                    />
-                                                    Recursive
-                                                </label>
-                                                <span className="text-xs text-secondary">•</span>
-                                                <span className="text-xs text-secondary">{dir.patterns.join(', ')}</span>
+                                            <div className="flex flex-col gap-1 mt-1">
+                                                <div className="flex gap-2">
+                                                    <label className="flex items-center gap-1 text-xs text-secondary cursor-pointer">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={dir.recursive}
+                                                            onChange={() => {
+                                                                const newDirs = [...config.watchDirectories];
+                                                                newDirs[index].recursive = !newDirs[index].recursive;
+                                                                setConfig({ ...config, watchDirectories: newDirs });
+                                                            }}
+                                                        />
+                                                        Recursive
+                                                    </label>
+                                                    <span className="text-xs text-secondary">•</span>
+                                                    <span className="text-xs text-secondary">
+                                                        Include: {dir.includePatterns.join(', ')}
+                                                    </span>
+                                                </div>
+                                                {dir.excludePatterns.length > 0 && (
+                                                    <span className="text-xs text-secondary">
+                                                        Exclude: {dir.excludePatterns.join(', ')}
+                                                    </span>
+                                                )}
                                             </div>
                                         </div>
                                         <button
-                                            className="btn-icon text-danger hover:bg-danger/10"
+                                            className="btn-icon text-danger hover-bg-danger-10"
                                             onClick={() => removeWatchDir(index)}
                                             title="Remove"
                                         >

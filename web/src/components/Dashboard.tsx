@@ -1,12 +1,13 @@
-import type { Job, SystemConfig } from '../types';
+import type { Job, SystemConfig, SystemStats } from '../types';
 import './Dashboard.css';
 
 interface DashboardProps {
     jobs: Job[];
     config: SystemConfig | null;
+    stats: SystemStats | null;
 }
 
-export default function Dashboard({ jobs, config }: DashboardProps) {
+export default function Dashboard({ jobs, config, stats }: DashboardProps) {
     const activeJobs = jobs.filter(j => j.status === 'processing');
     const completedJobs = jobs.filter(j => j.status === 'completed');
     const failedJobs = jobs.filter(j => j.status === 'failed');
@@ -71,33 +72,85 @@ export default function Dashboard({ jobs, config }: DashboardProps) {
                 </div>
             </div>
 
-            {config && (
-                <div className="card mt-4">
-                    <div className="card-header">
-                        <h3 className="card-title">System Configuration</h3>
-                    </div>
-                    <div className="card-body">
-                        <div className="config-grid">
-                            <div className="config-item">
-                                <span className="config-label">GPU Vendor</span>
-                                <span className="config-value">{config.gpuVendor.toUpperCase()}</span>
-                            </div>
-                            <div className="config-item">
-                                <span className="config-label">Quality Preset</span>
-                                <span className="config-value">{config.qualityPreset}</span>
-                            </div>
-                            <div className="config-item">
-                                <span className="config-label">CRF</span>
-                                <span className="config-value">{config.crf}</span>
-                            </div>
-                            <div className="config-item">
-                                <span className="config-label">AI Provider</span>
-                                <span className="config-value">{config.aiProvider || 'None'}</span>
+            <div className="grid grid-2 mt-4">
+                {/* Real System Stats */}
+                {stats && (
+                    <div className="card">
+                        <div className="card-header">
+                            <h3 className="card-title">System Resources</h3>
+                        </div>
+                        <div className="card-body">
+                            <div className="resource-list">
+                                <div className="resource-item">
+                                    <div className="resource-info">
+                                        <span>CPU Usage</span>
+                                        <span>{stats.cpuUsage.toFixed(1)}%</span>
+                                    </div>
+                                    <div className="progress-bar mini">
+                                        <div className="progress-fill" style={{ width: `${stats.cpuUsage}%`, backgroundColor: stats.cpuUsage > 80 ? 'var(--status-failed)' : 'var(--brand-teal)' }} />
+                                    </div>
+                                </div>
+                                <div className="resource-item">
+                                    <div className="resource-info">
+                                        <span>Memory Usage</span>
+                                        <span>{stats.memoryUsage.toFixed(1)}%</span>
+                                    </div>
+                                    <div className="progress-bar mini">
+                                        <div className="progress-fill" style={{ width: `${stats.memoryUsage}%`, backgroundColor: stats.memoryUsage > 80 ? 'var(--status-failed)' : 'var(--brand-teal)' }} />
+                                    </div>
+                                </div>
+                                <div className="resource-item">
+                                    <div className="resource-info">
+                                        <span>GPU Utilization</span>
+                                        <span>{stats.gpuUsage.toFixed(1)}%</span>
+                                    </div>
+                                    <div className="progress-bar mini">
+                                        <div className="progress-fill" style={{ width: `${stats.gpuUsage}%`, backgroundColor: 'var(--brand-teal)' }} />
+                                    </div>
+                                </div>
+                                <div className="resource-item">
+                                    <div className="resource-info">
+                                        <span>Disk Space (Free)</span>
+                                        <span>{stats.diskFreeGB.toFixed(1)} GB</span>
+                                    </div>
+                                    <div className="progress-bar mini">
+                                        <div className="progress-fill" style={{ width: `${100 - stats.diskUsage}%`, backgroundColor: stats.diskUsage > 90 ? 'var(--status-failed)' : 'var(--brand-teal)' }} />
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
-                </div>
-            )}
+                )}
+
+                {/* System Configuration */}
+                {config && (
+                    <div className="card">
+                        <div className="card-header">
+                            <h3 className="card-title">System Configuration</h3>
+                        </div>
+                        <div className="card-body">
+                            <div className="config-grid">
+                                <div className="config-item">
+                                    <span className="config-label">GPU Vendor</span>
+                                    <span className="config-value">{config.gpuVendor.toUpperCase()}</span>
+                                </div>
+                                <div className="config-item">
+                                    <span className="config-label">Quality Preset</span>
+                                    <span className="config-value">{config.qualityPreset}</span>
+                                </div>
+                                <div className="config-item">
+                                    <span className="config-label">CRF</span>
+                                    <span className="config-value">{config.crf}</span>
+                                </div>
+                                <div className="config-item">
+                                    <span className="config-label">AI Provider</span>
+                                    <span className="config-value">{config.aiProvider || 'None'}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
 
             {activeJobs.length > 0 && (
                 <div className="card mt-4">
@@ -114,7 +167,9 @@ export default function Dashboard({ jobs, config }: DashboardProps) {
                                                 {job.type}
                                             </span>
                                         </div>
-                                        <div className="job-path">{job.sourcePath}</div>
+                                        <div className="job-path" title={job.sourcePath}>
+                                            {job.sourcePath.split('/').pop()}
+                                        </div>
                                     </div>
                                     <div className="job-progress">
                                         <div className="progress-info">

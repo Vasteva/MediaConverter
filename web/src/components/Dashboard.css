@@ -75,6 +75,33 @@
     margin-top: 0.25rem;
 }
 
+.resource-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+.resource-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.resource-info {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.progress-bar.mini {
+    height: 6px;
+    background: var(--bg-tertiary);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
 .config-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -126,6 +153,9 @@
     font-size: 0.875rem;
     color: var(--text-secondary);
     font-family: 'Courier New', monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .job-progress {

@@ -60,3 +60,4 @@ Thumbs.db
 tmp/
 .cache/
 *.code-workspace
+vastiva_*

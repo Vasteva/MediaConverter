@@ -5,9 +5,10 @@ interface HeaderProps {
     onToggleTheme: () => void;
     currentView: string;
     onViewChange: (view: 'dashboard' | 'jobs' | 'scanner' | 'settings') => void;
+    isPremium?: boolean;
 }
 
-export default function Header({ theme, onToggleTheme, currentView, onViewChange }: HeaderProps) {
+export default function Header({ theme, onToggleTheme, currentView, onViewChange, isPremium }: HeaderProps) {
     return (
         <header className="header">
             <div className="header-container">
@@ -29,7 +30,10 @@ export default function Header({ theme, onToggleTheme, currentView, onViewChange
                             />
                         </svg>
                         <div className="logo-text">
-                            <div className="logo-title">VASTIVA</div>
+                            <div className="logo-title flex items-center">
+                                VASTIVA
+                                {isPremium && <span className="pro-tag ml-2">PRO</span>}
+                            </div>
                             <div className="logo-subtitle">MEDIA CONVERTER</div>
                         </div>
                     </div>

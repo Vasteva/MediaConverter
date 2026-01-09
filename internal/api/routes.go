@@ -1,15 +1,25 @@
 package api
 
 import (
+	"log"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/rwurtz/vastiva/internal/ai"
 	"github.com/rwurtz/vastiva/internal/config"
 	"github.com/rwurtz/vastiva/internal/jobs"
+	"github.com/rwurtz/vastiva/internal/license"
+	"github.com/rwurtz/vastiva/internal/scanner"
+	"github.com/rwurtz/vastiva/internal/system"
 )
 
-func RegisterRoutes(app *fiber.App, jm *jobs.Manager, cfg *config.Config) {
+func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *config.Config) {
 	api := app.Group("/api")
+
+	// System Stats
+	api.Get("/stats", func(c *fiber.Ctx) error {
+		return c.JSON(system.GetStats())
+	})
 
 	// Health check
 	api.Get("/health", func(c *fiber.Ctx) error {
@@ -23,10 +33,10 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, cfg *config.Config) {
 
 	api.Post("/jobs", func(c *fiber.Ctx) error {
 		var req struct {
-			Type        jobs.JobType `json:"type"`
-			SourcePath  string       `json:"sourcePath"`
-			DestPath    string       `json:"destinationPath"`
-			Priority    int          `json:"priority"`
+			Type       jobs.JobType `json:"type"`
+			SourcePath string       `json:"sourcePath"`
+			DestPath   string       `json:"destinationPath"`
+			Priority   int          `json:"priority"`
 		}
 		if err := c.BodyParser(&req); err != nil {
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
@@ -69,7 +79,88 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, cfg *config.Config) {
 			"qualityPreset": cfg.QualityPreset,
 			"crf":           cfg.CRF,
 			"aiProvider":    cfg.AIProvider,
+			"aiApiKey":      cfg.AIApiKey,
+			"aiEndpoint":    cfg.AIEndpoint,
+			"aiModel":       cfg.AIModel,
+			"licenseKey":    cfg.LicenseKey,
+			"isPremium":     cfg.IsPremium,
+			"planName":      license.GetPlanName(cfg.LicenseKey),
 		})
+	})
+
+	api.Post("/config", func(c *fiber.Ctx) error {
+		var req struct {
+			QualityPreset string `json:"qualityPreset"`
+			CRF           int    `json:"crf"`
+			AIProvider    string `json:"aiProvider"`
+			AIApiKey      string `json:"aiApiKey"`
+			AIEndpoint    string `json:"aiEndpoint"`
+			AIModel       string `json:"aiModel"`
+			LicenseKey    string `json:"licenseKey"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		// Update config
+		if req.QualityPreset != "" {
+			cfg.QualityPreset = req.QualityPreset
+		}
+		if req.CRF != 0 {
+			cfg.CRF = req.CRF
+		}
+		if req.AIProvider != "" {
+			cfg.AIProvider = req.AIProvider
+		}
+		cfg.AIApiKey = req.AIApiKey
+		cfg.AIEndpoint = req.AIEndpoint
+		cfg.AIModel = req.AIModel
+
+		if req.LicenseKey != "" {
+			cfg.LicenseKey = req.LicenseKey
+			cfg.IsPremium = license.Validate(req.LicenseKey)
+		}
+
+		// Re-initialize AI provider in manager
+		newAI, err := ai.NewProvider(ai.AIConfig{
+			Provider: cfg.AIProvider,
+			APIKey:   cfg.AIApiKey,
+			Endpoint: cfg.AIEndpoint,
+			Model:    cfg.AIModel,
+		})
+		if err == nil {
+			jm.UpdateAIProvider(newAI)
+		} else {
+			log.Printf("Error updating AI provider: %v", err)
+		}
+
+		log.Printf("Configuration updated: AI Provider=%s, Premium=%v", cfg.AIProvider, cfg.IsPremium)
+		return c.JSON(fiber.Map{"success": true})
+	})
+
+	// Scanner Config
+	api.Get("/scanner/config", func(c *fiber.Ctx) error {
+		if fs == nil {
+			return c.Status(503).JSON(fiber.Map{"error": "Scanner not initialized"})
+		}
+		return c.JSON(fs.GetConfig())
+	})
+
+	api.Post("/scanner/config", func(c *fiber.Ctx) error {
+		if fs == nil {
+			return c.Status(503).JSON(fiber.Map{"error": "Scanner not initialized"})
+		}
+
+		var newCfg scanner.ScannerConfig
+		if err := c.BodyParser(&newCfg); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		if err := fs.UpdateConfig(&newCfg); err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		return c.JSON(fiber.Map{"success": true})
 	})
 }
 

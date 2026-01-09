@@ -175,9 +175,17 @@ func (s *Scanner) Start() error {
 
 // Stop gracefully stops the scanner
 func (s *Scanner) Stop() {
+	s.mu.Lock()
+	if s.stopCh == nil {
+		s.mu.Unlock()
+		return
+	}
+
 	log.Println("[Scanner] Stopping...")
 	close(s.stopCh)
+	s.stopCh = nil // Mark as stopped
 	s.cancel()
+	s.mu.Unlock()
 
 	if s.watcher != nil {
 		s.watcher.Close()
@@ -191,6 +199,52 @@ func (s *Scanner) Stop() {
 	}
 
 	log.Println("[Scanner] Stopped")
+}
+
+// GetConfig returns the current scanner configuration
+func (s *Scanner) GetConfig() *ScannerConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config
+}
+
+// UpdateConfig updates the scanner configuration and restarts if necessary
+func (s *Scanner) UpdateConfig(newCfg *ScannerConfig) error {
+	s.mu.Lock()
+	wasEnabled := s.config.Enabled
+	s.config = newCfg
+	s.mu.Unlock()
+
+	log.Println("[Scanner] Configuration updated, restarting scanner...")
+
+	// Stop the scanner if it's running
+	s.Stop()
+
+	// Re-initialize context and stop channel
+	s.mu.Lock()
+	s.ctx, s.cancel = context.WithCancel(context.Background())
+	s.stopCh = make(chan struct{})
+	s.mu.Unlock()
+
+	// Re-initialize watcher if mode changed to watch or hybrid
+	if newCfg.Mode == ScanModeWatch || newCfg.Mode == ScanModeHybrid {
+		watcher, err := fsnotify.NewWatcher()
+		if err != nil {
+			return fmt.Errorf("failed to create file watcher: %w", err)
+		}
+		s.watcher = watcher
+	} else {
+		s.watcher = nil
+	}
+
+	// Start if enabled
+	if newCfg.Enabled {
+		return s.Start()
+	} else if wasEnabled {
+		log.Println("[Scanner] Scanner disabled")
+	}
+
+	return nil
 }
 
 // ScanAll scans all configured directories

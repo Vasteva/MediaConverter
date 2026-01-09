@@ -16,13 +16,15 @@ type ProgressCallback func(progress TranscodeProgress)
 
 // TranscodeProgress contains real-time transcoding metrics
 type TranscodeProgress struct {
-	Frame      int     // Current frame number
-	FPS        float64 // Frames per second
-	Bitrate    string  // Current bitrate
-	Size       string  // Output file size
-	Time       string  // Current timestamp
-	Speed      string  // Processing speed (e.g., "2.5x")
-	Percentage int     // Percentage complete (0-100)
+	Frame           int     // Current frame number
+	FPS             float64 // Frames per second
+	Bitrate         string  // Current bitrate
+	Size            string  // Output file size
+	Time            string  // Current timestamp
+	Speed           string  // Processing speed (e.g., "2.5x")
+	SpeedMultiplier float64 // Numerical speed multiplier
+	Percentage      int     // Percentage complete (0-100)
+	ETA             string  // Estimated time remaining
 }
 
 // TranscodeWithProgress executes FFmpeg with real-time progress monitoring
@@ -46,7 +48,7 @@ func (f *FFmpegWrapper) TranscodeWithProgress(ctx context.Context, opts Transcod
 	}
 
 	// Parse progress in a goroutine
-	go f.parseProgress(stderr, callback)
+	go f.parseProgress(stderr, opts.TotalDuration, callback)
 
 	// Wait for completion
 	if err := cmd.Wait(); err != nil {
@@ -57,7 +59,7 @@ func (f *FFmpegWrapper) TranscodeWithProgress(ctx context.Context, opts Transcod
 }
 
 // parseProgress parses FFmpeg progress output
-func (f *FFmpegWrapper) parseProgress(reader io.Reader, callback ProgressCallback) {
+func (f *FFmpegWrapper) parseProgress(reader io.Reader, totalDuration float64, callback ProgressCallback) {
 	scanner := bufio.NewScanner(reader)
 	progress := TranscodeProgress{}
 
@@ -72,34 +74,32 @@ func (f *FFmpegWrapper) parseProgress(reader io.Reader, callback ProgressCallbac
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// Parse frame
+		// Parse individual metrics (same as before)
 		if matches := frameRegex.FindStringSubmatch(line); len(matches) > 1 {
 			progress.Frame, _ = strconv.Atoi(matches[1])
 		}
-
-		// Parse FPS
 		if matches := fpsRegex.FindStringSubmatch(line); len(matches) > 1 {
 			progress.FPS, _ = strconv.ParseFloat(matches[1], 64)
 		}
-
-		// Parse bitrate
 		if matches := bitrateRegex.FindStringSubmatch(line); len(matches) > 1 {
 			progress.Bitrate = matches[1]
 		}
-
-		// Parse size
 		if matches := sizeRegex.FindStringSubmatch(line); len(matches) > 1 {
 			progress.Size = matches[1]
 		}
-
-		// Parse time
 		if matches := timeRegex.FindStringSubmatch(line); len(matches) > 1 {
 			progress.Time = matches[1]
 		}
-
-		// Parse speed
 		if matches := speedRegex.FindStringSubmatch(line); len(matches) > 1 {
 			progress.Speed = matches[1]
+			speedStr := strings.TrimSuffix(matches[1], "x")
+			progress.SpeedMultiplier, _ = strconv.ParseFloat(speedStr, 64)
+		}
+
+		// Calculate derived metrics
+		if totalDuration > 0 && progress.Time != "" {
+			progress.Percentage = CalculatePercentage(progress.Time, totalDuration)
+			progress.ETA = EstimateETA(progress.Time, totalDuration, progress.Speed)
 		}
 
 		// Call the callback with updated progress

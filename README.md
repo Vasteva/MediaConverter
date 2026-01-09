@@ -5,9 +5,13 @@ A high-performance, AI-powered media transcoding platform built with Go.
 ## Features
 
 - **Job Queue**: Concurrent processing with goroutine worker pool
-- **Hardware Acceleration**: NVIDIA NVENC, Intel QSV, AMD AMF, VAAPI
+- **Hardware Acceleration**: NVIDIA NVENC, Intel QSV, AMD AMF, VAAPI (Auto-detected)
 - **AI Integration**: Gemini, OpenAI, Claude, Ollama support
-- **Web UI**: React SPA (to be added)
+- **Vastiva Pro Features**:
+    - **Adaptive Encoding**: AI-powered CRF selection for optimal quality/size.
+    - **Smart Metadata**: Automatic filename cleaning and Title/Year extraction.
+    - **Whisper Subtitles**: (Coming Soon) AI-generated speech-to-text.
+- **Web UI**: Modern React Dashboard with real-time monitoring.
 
 ## Quick Start
 
@@ -91,6 +95,8 @@ See [`internal/scanner/README.md`](internal/scanner/README.md) for file scanner 
 | `MAX_CONCURRENT_JOBS` | Worker count | `2` |
 | `AI_PROVIDER` | AI backend (gemini/openai/claude/ollama/none) | `none` |
 | `AI_API_KEY` | API key for AI provider | |
+| `AI_MODEL` | AI model to use | |
+| `LICENSE_KEY` | Vastiva Pro license key | |
 | `ADMIN_PASSWORD` | Web UI password | |
 | `SCANNER_ENABLED` | Enable automatic file scanning | `false` |
 | `SCANNER_MODE` | Scan mode (manual/startup/periodic/watch/hybrid) | `manual` |
