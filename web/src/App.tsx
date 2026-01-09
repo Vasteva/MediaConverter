@@ -6,7 +6,7 @@ import JobList from './components/JobList';
 import ScannerConfigComponent from './components/ScannerConfig';
 import Search from './components/Search';
 import Settings from './components/Settings';
-import type { Job, SystemConfig, ScannerConfig, SystemStats } from './types';
+import type { Job, SystemConfig, ScannerConfig, SystemStats, DashboardStats } from './types';
 
 function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>('dark');
@@ -15,6 +15,7 @@ function App() {
   const [config, setConfig] = useState<SystemConfig | null>(null);
   const [scannerConfig, setScannerConfig] = useState<ScannerConfig | null>(null);
   const [stats, setStats] = useState<SystemStats | null>(null);
+  const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   // Load theme from localStorage
@@ -41,6 +42,13 @@ function App() {
       if (response.ok) {
         const data = await response.json();
         setStats(data);
+      }
+
+      // Also fetch dashboard stats if premium
+      const dResponse = await fetch('/api/dashboard/stats');
+      if (dResponse.ok) {
+        const dData = await dResponse.json();
+        setDashboardStats(dData);
       }
     } catch (error) {
       console.error('Failed to fetch stats:', error);
@@ -200,7 +208,7 @@ function App() {
 
       <main className="main-content">
         {currentView === 'dashboard' && (
-          <Dashboard jobs={jobs} config={config} stats={stats} />
+          <Dashboard jobs={jobs} config={config} stats={stats} dashboardStats={dashboardStats} />
         )}
         {currentView === 'jobs' && (
           <JobList

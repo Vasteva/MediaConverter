@@ -1,13 +1,14 @@
-import type { Job, SystemConfig, SystemStats } from '../types';
+import type { Job, SystemConfig, SystemStats, DashboardStats } from '../types';
 import './Dashboard.css';
 
 interface DashboardProps {
     jobs: Job[];
     config: SystemConfig | null;
     stats: SystemStats | null;
+    dashboardStats: DashboardStats | null;
 }
 
-export default function Dashboard({ jobs, config, stats }: DashboardProps) {
+export default function Dashboard({ jobs, config, stats, dashboardStats }: DashboardProps) {
     const activeJobs = jobs.filter(j => j.status === 'processing');
     const completedJobs = jobs.filter(j => j.status === 'completed');
     const failedJobs = jobs.filter(j => j.status === 'failed');
@@ -15,12 +16,60 @@ export default function Dashboard({ jobs, config, stats }: DashboardProps) {
         ? Math.round((completedJobs.length / jobs.length) * 100)
         : 0;
 
+    const formatSize = (bytes: number) => {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    };
+
     return (
         <div className="dashboard">
-            <div className="dashboard-header">
-                <h1>Dashboard</h1>
-                <p className="text-secondary">System overview and active jobs</p>
+            <div className="dashboard-header flex justify-between items-center">
+                <div>
+                    <h1>Dashboard</h1>
+                    <p className="text-secondary">System overview and active jobs</p>
+                </div>
+                {config?.isPremium && dashboardStats && (
+                    <div className="premium-efficiency-badge">
+                        <div className="flex flex-col items-end">
+                            <span className="text-[10px] opacity-70 uppercase tracking-widest font-bold">System Efficiency</span>
+                            <span className="text-2xl font-black text-primary">{dashboardStats.efficiencyScore.toFixed(0)}%</span>
+                        </div>
+                        <div className="efficiency-ring" style={{ '--percent': dashboardStats.efficiencyScore } as any} />
+                    </div>
+                )}
             </div>
+
+            {config?.isPremium && dashboardStats && (
+                <div className="premium-insights-grid mt-4 mb-8">
+                    <div className="insight-card glass">
+                        <div className="insight-label">Storage Saved</div>
+                        <div className="insight-value">{formatSize(dashboardStats.totalStorageSaved)}</div>
+                        <div className="insight-sub">Life-time reduction</div>
+                        <div className="insight-icon">💾</div>
+                    </div>
+                    <div className="insight-card glass">
+                        <div className="insight-label">Subtitles Generated</div>
+                        <div className="insight-value">{dashboardStats.totalSubtitlesCreated}</div>
+                        <div className="insight-sub">AI Whisper Transcriptions</div>
+                        <div className="insight-icon">💬</div>
+                    </div>
+                    <div className="insight-card glass">
+                        <div className="insight-label">AI Upscales</div>
+                        <div className="insight-value">{dashboardStats.totalUpscales}</div>
+                        <div className="insight-sub">Enhanced to 1080p/4K</div>
+                        <div className="insight-icon">✨</div>
+                    </div>
+                    <div className="insight-card glass">
+                        <div className="insight-label">Smart Metdata</div>
+                        <div className="insight-value">{dashboardStats.totalCleaned}</div>
+                        <div className="insight-sub">Files organized by AI</div>
+                        <div className="insight-icon">🏷️</div>
+                    </div>
+                </div>
+            )}
 
             <div className="grid grid-4">
                 <div className="stat-card">

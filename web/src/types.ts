@@ -64,6 +64,15 @@ export interface SystemStats {
     diskFreeGB: number;
 }
 
+export interface DashboardStats {
+    totalStorageSaved: number;
+    totalAIJobs: number;
+    totalSubtitlesCreated: number;
+    totalUpscales: number;
+    totalCleaned: number;
+    efficiencyScore: number;
+}
+
 export interface ProcessedFile {
     path: string;
     hash: string;

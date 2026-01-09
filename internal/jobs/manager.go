@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sync"
@@ -51,6 +52,10 @@ type Job struct {
 	CreateSubtitles bool      `json:"createSubtitles"` // Premium feature
 	Upscale         bool      `json:"upscale"`         // Premium feature
 	Resolution      string    `json:"resolution"`      // Premium feature
+	InputSize       int64     `json:"inputSize"`
+	OutputSize      int64     `json:"outputSize"`
+	AICleaned       bool      `json:"aiCleaned"`
+	AISubtitles     bool      `json:"aiSubtitles"`
 
 	// Internal
 	ctx    context.Context
@@ -69,6 +74,7 @@ type Manager struct {
 	ffmpeg        *media.FFmpegWrapper
 	makemkv       *media.MakeMKVWrapper
 	ai            ai.Provider
+	OnJobComplete func(*Job)
 }
 
 func NewManager(cfg *config.Config, aiProvider ai.Provider) (*Manager, error) {
@@ -171,12 +177,18 @@ func (m *Manager) processJob(job *Job) {
 	job.Status = StatusProcessing
 	job.StartedAt = time.Now()
 
+	// Track input size
+	if info, err := os.Stat(job.SourcePath); err == nil {
+		job.InputSize = info.Size()
+	}
+
 	// Premium Feature: AI Metadata Cleanup
 	if m.config.IsPremium && m.ai != nil && job.Type == JobTypeOptimize {
 		cleaner := meta.NewCleaner(m.ai)
 		filename := filepath.Base(job.SourcePath)
 		if cleanTitle, err := cleaner.CleanFilename(job.ctx, filename); err == nil {
 			log.Printf("[Premium] AI cleaned filename: %s -> %s", filename, cleanTitle)
+			job.AICleaned = true
 			// Adjust destination path if needed
 			ext := filepath.Ext(job.DestinationPath)
 			dir := filepath.Dir(job.DestinationPath)
@@ -200,8 +212,17 @@ func (m *Manager) processJob(job *Job) {
 	} else {
 		job.Status = StatusCompleted
 		job.Progress = 100
+
+		// Track output size
+		if info, err := os.Stat(job.DestinationPath); err == nil {
+			job.OutputSize = info.Size()
+		}
 	}
 	job.CompletedAt = time.Now()
+
+	if m.OnJobComplete != nil {
+		m.OnJobComplete(job)
+	}
 }
 
 func (m *Manager) runExtraction(job *Job) error {
@@ -263,6 +284,7 @@ func (m *Manager) runOptimization(job *Job) error {
 			// Don't fail the whole job just because subtitles failed
 		} else {
 			log.Printf("[Premium] Subtitles generated: %s", srtPath)
+			job.AISubtitles = true
 		}
 	}
 

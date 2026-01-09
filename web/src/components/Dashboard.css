@@ -181,3 +181,80 @@
         grid-template-columns: 1fr;
     }
 }
+
+/* Premium Insights */
+.premium-insights-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1.5rem;
+}
+
+.insight-card {
+    position: relative;
+    padding: 1.5rem;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    overflow: hidden;
+    backdrop-filter: blur(12px);
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.01) 100%);
+}
+
+.insight-label {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--brand-teal);
+    margin-bottom: 0.5rem;
+}
+
+.insight-value {
+    font-size: 1.75rem;
+    font-weight: 800;
+    color: var(--text-primary);
+    margin-bottom: 0.25rem;
+}
+
+.insight-sub {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.insight-icon {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    font-size: 1.5rem;
+    opacity: 0.5;
+}
+
+.premium-efficiency-badge {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.5rem 1rem;
+    background: rgba(61, 217, 208, 0.05);
+    border: 1px solid rgba(61, 217, 208, 0.1);
+    border-radius: 9999px;
+}
+
+.efficiency-ring {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: conic-gradient(var(--brand-teal) calc(var(--percent) * 1%), transparent 0);
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.efficiency-ring::before {
+    content: '';
+    position: absolute;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    background: var(--bg-primary);
+}

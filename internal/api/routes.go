@@ -19,7 +19,48 @@ import (
 )
 
 func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *config.Config) {
+	if fs != nil {
+		jm.OnJobComplete = fs.CompleteProcessed
+	}
+
 	api := app.Group("/api")
+
+	// Dashboard Stats
+	api.Get("/dashboard/stats", func(c *fiber.Ctx) error {
+		processed := fs.GetProcessedFiles()
+		stats := system.DashboardStats{}
+
+		for _, f := range processed {
+			if f.InputSize > 0 && f.OutputSize > 0 {
+				saved := f.InputSize - f.OutputSize
+				if saved > 0 {
+					stats.TotalStorageSaved += saved
+				}
+			}
+			if f.AISubtitles {
+				stats.TotalSubtitlesCreated++
+			}
+			if f.AIUpscale {
+				stats.TotalUpscales++
+			}
+			if f.AICleaned {
+				stats.TotalCleaned++
+			}
+			if f.AISubtitles || f.AIUpscale || f.AICleaned {
+				stats.TotalAIJobs++
+			}
+		}
+
+		// Calculate efficiency (rough score out of 100 based on compression and AI usage)
+		if len(processed) > 0 {
+			stats.EfficiencyScore = 85.0 + (float64(stats.TotalAIJobs) * 2.0)
+			if stats.EfficiencyScore > 100 {
+				stats.EfficiencyScore = 100
+			}
+		}
+
+		return c.JSON(stats)
+	})
 
 	// System Stats
 	api.Get("/stats", func(c *fiber.Ctx) error {

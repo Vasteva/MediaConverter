@@ -86,6 +86,11 @@ type ProcessedFile struct {
 	ProcessedAt time.Time `json:"processedAt"`
 	JobID       string    `json:"jobId"`
 	JobType     string    `json:"jobType"`
+	InputSize   int64     `json:"inputSize"`
+	OutputSize  int64     `json:"outputSize"`
+	AISubtitles bool      `json:"aiSubtitles"`
+	AIUpscale   bool      `json:"aiUpscale"`
+	AICleaned   bool      `json:"aiCleaned"`
 }
 
 // NewScanner creates a new file scanner
@@ -214,6 +219,21 @@ func (s *Scanner) GetConfig() *ScannerConfig {
 // GetProcessedFiles returns all files processed by the scanner
 func (s *Scanner) GetProcessedFiles() []ProcessedFile {
 	return s.processedDB.GetAll()
+}
+
+// CompleteProcessed updates a processed file entry with final stats from a job
+func (s *Scanner) CompleteProcessed(job *jobs.Job) {
+	s.processedDB.MarkProcessed(ProcessedFile{
+		Path:        job.SourcePath,
+		JobID:       job.ID,
+		JobType:     string(job.Type),
+		ProcessedAt: time.Now(),
+		InputSize:   job.InputSize,
+		OutputSize:  job.OutputSize,
+		AISubtitles: job.AISubtitles,
+		AIUpscale:   job.Upscale,
+		AICleaned:   job.AICleaned,
+	})
 }
 
 // UpdateConfig updates the scanner configuration and restarts if necessary
@@ -426,8 +446,12 @@ func (s *Scanner) createJobForFile(path string) error {
 
 	s.jobManager.AddJob(job)
 
-	// Mark as processed
-	s.processedDB.MarkProcessed(path, job.ID, string(jobType))
+	// Mark as processed (initial entry)
+	s.processedDB.MarkProcessed(ProcessedFile{
+		Path:    path,
+		JobID:   job.ID,
+		JobType: string(jobType),
+	})
 
 	log.Printf("[Scanner] Created %s job %s for %s", jobType, job.ID, path)
 
@@ -673,21 +697,23 @@ func (db *ProcessedDB) GetAll() []ProcessedFile {
 	return files
 }
 
-// MarkProcessed marks a file as processed
-func (db *ProcessedDB) MarkProcessed(path, jobID, jobType string) {
+// MarkProcessed marks a file as processed and saves the database
+func (db *ProcessedDB) MarkProcessed(f ProcessedFile) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	// Calculate file hash for verification
-	hash, _ := calculateFileHash(path)
-
-	db.processed[path] = ProcessedFile{
-		Path:        path,
-		Hash:        hash,
-		ProcessedAt: time.Now(),
-		JobID:       jobID,
-		JobType:     jobType,
+	// Calculate file hash if not provided
+	if f.Hash == "" {
+		hash, _ := calculateFileHash(f.Path)
+		f.Hash = hash
 	}
+
+	if f.ProcessedAt.IsZero() {
+		f.ProcessedAt = time.Now()
+	}
+
+	db.processed[f.Path] = f
+	db.Save()
 }
 
 // calculateFileHash computes SHA256 hash of first 1MB of file

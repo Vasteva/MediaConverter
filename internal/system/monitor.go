@@ -18,6 +18,15 @@ type Stats struct {
 	DiskFreeGB  float64 `json:"diskFreeGB"`
 }
 
+type DashboardStats struct {
+	TotalStorageSaved     int64   `json:"totalStorageSaved"`
+	TotalAIJobs           int     `json:"totalAIJobs"`
+	TotalSubtitlesCreated int     `json:"totalSubtitlesCreated"`
+	TotalUpscales         int     `json:"totalUpscales"`
+	TotalCleaned          int     `json:"totalCleaned"`
+	EfficiencyScore       float64 `json:"efficiencyScore"`
+}
+
 func GetStats() Stats {
 	stats := Stats{}
 
