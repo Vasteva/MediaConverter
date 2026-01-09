@@ -1,8 +1,10 @@
 package api
 
 import (
+	"fmt"
 	"log"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -12,6 +14,7 @@ import (
 	"github.com/rwurtz/vastiva/internal/jobs"
 	"github.com/rwurtz/vastiva/internal/license"
 	"github.com/rwurtz/vastiva/internal/scanner"
+	"github.com/rwurtz/vastiva/internal/security"
 	"github.com/rwurtz/vastiva/internal/system"
 )
 
@@ -47,11 +50,29 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 		}
 
+		// Security: Validate paths to prevent arbitrary file access
+		sourcePath, err := security.ValidatePath(req.SourcePath, cfg.SourceDir)
+		if err != nil {
+			return c.Status(403).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		destPath := req.DestPath
+		if destPath != "" {
+			var dErr error
+			destPath, dErr = security.ValidatePath(req.DestPath, cfg.DestDir)
+			if dErr != nil {
+				return c.Status(403).JSON(fiber.Map{"error": dErr.Error()})
+			}
+		} else {
+			// Default destination in DestDir
+			destPath = filepath.Join(cfg.DestDir, filepath.Base(sourcePath))
+		}
+
 		job := &jobs.Job{
 			ID:              generateID(),
 			Type:            req.Type,
-			SourcePath:      req.SourcePath,
-			DestinationPath: req.DestPath,
+			SourcePath:      sourcePath,
+			DestinationPath: destPath,
 			Status:          jobs.StatusPending,
 			Priority:        req.Priority,
 			CreateSubtitles: req.CreateSubtitles,
@@ -87,10 +108,10 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			"qualityPreset": cfg.QualityPreset,
 			"crf":           cfg.CRF,
 			"aiProvider":    cfg.AIProvider,
-			"aiApiKey":      cfg.AIApiKey,
+			"aiApiKey":      security.MaskKey(cfg.AIApiKey),
 			"aiEndpoint":    cfg.AIEndpoint,
 			"aiModel":       cfg.AIModel,
-			"licenseKey":    cfg.LicenseKey,
+			"licenseKey":    security.MaskKey(cfg.LicenseKey),
 			"isPremium":     cfg.IsPremium,
 			"planName":      license.GetPlanName(cfg.LicenseKey),
 		})
@@ -120,11 +141,19 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		if req.AIProvider != "" {
 			cfg.AIProvider = req.AIProvider
 		}
-		cfg.AIApiKey = req.AIApiKey
-		cfg.AIEndpoint = req.AIEndpoint
-		cfg.AIModel = req.AIModel
 
-		if req.LicenseKey != "" {
+		// Only update keys if they aren't masked patterns
+		if req.AIApiKey != "" && !strings.Contains(req.AIApiKey, "....") {
+			cfg.AIApiKey = req.AIApiKey
+		}
+		if req.AIEndpoint != "" {
+			cfg.AIEndpoint = req.AIEndpoint
+		}
+		if req.AIModel != "" {
+			cfg.AIModel = req.AIModel
+		}
+
+		if req.LicenseKey != "" && !strings.Contains(req.LicenseKey, "....") {
 			cfg.LicenseKey = req.LicenseKey
 			cfg.IsPremium = license.Validate(req.LicenseKey)
 		}
@@ -162,6 +191,24 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		var newCfg scanner.ScannerConfig
 		if err := c.BodyParser(&newCfg); err != nil {
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		// Security: Validate watch directories
+		for i, dir := range newCfg.WatchDirectories {
+			validPath, err := security.ValidatePath(dir.Path, cfg.SourceDir)
+			if err != nil {
+				return c.Status(403).JSON(fiber.Map{"error": fmt.Sprintf("Watch directory %d: %v", i, err)})
+			}
+			newCfg.WatchDirectories[i].Path = validPath
+		}
+
+		// Security: Validate output directory
+		if newCfg.OutputDirectory != "" {
+			validOutput, err := security.ValidatePath(newCfg.OutputDirectory, cfg.DestDir)
+			if err != nil {
+				return c.Status(403).JSON(fiber.Map{"error": fmt.Sprintf("Output directory: %v", err)})
+			}
+			newCfg.OutputDirectory = validOutput
 		}
 
 		if err := fs.UpdateConfig(&newCfg); err != nil {
