@@ -1,119 +1,239 @@
-# Vastiva - Intelligent Media Converter
+# Vastiva - AI-Powered Media Converter
 
-A high-performance, AI-powered media transcoding platform built with Go.
+A production-ready, AI-enhanced media transcoding platform with intelligent optimization and natural language search.
 
-## Features
+## ✨ Features
 
-- **Job Queue**: Concurrent processing with goroutine worker pool
-- **Hardware Acceleration**: NVIDIA NVENC, Intel QSV, AMD AMF, VAAPI (Auto-detected)
-- **AI Integration**: Gemini, OpenAI, Claude, Ollama support
-- **Vastiva Pro Features**:
-    - **Adaptive Encoding**: AI-powered CRF selection for optimal quality/size.
-    - **Smart Metadata**: Automatic filename cleaning and Title/Year extraction.
-    - **Whisper Subtitles**: (Coming Soon) AI-generated speech-to-text.
-- **Web UI**: Modern React Dashboard with real-time monitoring.
+### Core Capabilities
+- **Job Queue System**: Concurrent processing with goroutine worker pool
+- **Hardware Acceleration**: NVIDIA NVENC, Intel QSV, AMD VAAPI (Auto-detected)
+- **Multi-Format Support**: H.265/HEVC encoding with 10-bit color depth
+- **Real-time Monitoring**: Live progress tracking, FPS, and ETA calculation
+- **Automated Scanner**: Watch directories for new media with multiple scan modes
 
-## Quick Start
+### 🤖 AI-Powered Features (Premium)
+- **Adaptive Encoding**: AI analyzes media to select optimal CRF values
+- **Smart Metadata**: Automatic filename cleaning and Title/Year extraction
+- **Whisper Subtitles**: AI-generated speech-to-text transcription (OpenAI)
+- **AI Upscaling**: Enhance videos to 1080p or 4K with intelligent scaling
+- **Natural Language Search**: Find media using semantic queries
+- **AI-Enhanced Dashboard**: Storage savings analytics and efficiency scoring
 
-### Prerequisites
+### 🎨 Modern Web Interface
+- **Premium Dashboard**: Glassmorphism design with real-time insights
+- **Job Management**: Create, monitor, and cancel transcoding jobs
+- **Scanner Configuration**: Visual setup for automated media discovery
+- **Settings Panel**: AI provider configuration and license management
+- **Dark/Light Themes**: Polished UI with smooth transitions
 
-- Go 1.22+
-- Docker (for containerized deployment)
-- FFmpeg (for transcoding)
+## 🚀 Quick Start
 
-### Development
+### Docker Deployment (Recommended)
+
+```bash
+# Clone repository
+git clone https://gitlab.wtzhome.com/vastiva/MediaConverter.git
+cd MediaConverter
+
+# Create environment file
+cp .env.example .env
+nano .env  # Configure your settings
+
+# Deploy with Docker Compose
+docker-compose up -d
+
+# Access web interface
+open http://localhost:8091
+```
+
+### Development Setup
 
 ```bash
 # Install dependencies
 go mod download
+cd web && npm install
 
-# Run locally
+# Run development server
 go run ./cmd/server
-
-# Build binary
-go build -o vastiva ./cmd/server
 ```
 
-### Docker Deployment
+## 📦 Production Deployment
 
+See [DEPLOYMENT.md](DEPLOYMENT.md) for comprehensive deployment guide including:
+- GitLab CI/CD pipeline setup
+- Automated builds and deployments
+- Traefik integration for HTTPS
+- Backup and monitoring procedures
+
+Quick deployment to production server:
 ```bash
-# Create .env file
-cp .env.example .env
-# Edit .env with your settings
+# Copy deployment script
+scp deploy.sh root@your-server:/tmp/
 
-# Build and run
-docker compose up -d --build
+# Run deployment
+ssh root@your-server
+sudo /tmp/deploy.sh
 ```
 
-## Project Structure
+## 🏗️ Project Structure
 
 ```
-vastiva-go/
-├── cmd/
-│   └── server/
-│       └── main.go              # Entry point
+vastiva/
+├── cmd/server/           # Application entry point
 ├── internal/
-│   ├── api/
-│   │   └── routes.go            # REST API handlers
-│   ├── config/
-│   │   └── config.go            # Environment config
-│   ├── jobs/
-│   │   └── manager.go           # Job queue with workers ✅
-│   └── media/
-│       ├── ffmpeg.go            # FFmpeg wrapper ✅
-│       ├── makemkv.go           # MakeMKV wrapper ✅
-│       ├── progress.go          # Progress tracking ✅
-│       ├── media_test.go        # Test suite ✅
-│       └── README.md            # Detailed documentation
-├── web/
-│   └── dist/                    # Frontend static files (WIP)
-├── Dockerfile
-├── docker-compose.yml
-└── go.mod
+│   ├── api/             # REST API routes
+│   ├── ai/              # AI provider integrations
+│   │   ├── meta/        # Smart metadata cleaning
+│   │   ├── search/      # Natural language search
+│   │   └── whisper/     # Subtitle generation
+│   ├── config/          # Configuration management
+│   ├── jobs/            # Job queue and workers
+│   ├── media/           # FFmpeg/MakeMKV wrappers
+│   ├── scanner/         # Automated file discovery
+│   ├── security/        # Path validation & masking
+│   └── system/          # System monitoring
+├── web/                 # React frontend
+├── Dockerfile           # Multi-stage build
+├── docker-compose.yml   # Production orchestration
+└── .gitlab-ci.yml       # CI/CD pipeline
 ```
 
-**Implementation Status:**
-- ✅ FFmpeg wrapper with multi-GPU support (NVIDIA, Intel, AMD, CPU)
-- ✅ MakeMKV wrapper for disc extraction
-- ✅ Real-time progress tracking with ETA calculation
-- ✅ Job manager integration
-- ✅ **File scanner with multiple modes** (manual, startup, periodic, watch, hybrid)
-- ✅ **Multi-directory monitoring** with recursive scanning
-- 🚧 Frontend UI (React/Vite scaffold in place)
+## 🔧 Configuration
 
-See [`internal/media/README.md`](internal/media/README.md) for detailed media processing documentation.  
-See [`internal/scanner/README.md`](internal/scanner/README.md) for file scanner configuration and usage.
-
-## Environment Variables
+### Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PORT` | Server port | `8080` |
+| `PORT` | Server port | `80` |
 | `SOURCE_DIR` | Media source directory | `/storage` |
 | `DEST_DIR` | Output directory | `/output` |
 | `GPU_VENDOR` | GPU type (nvidia/intel/amd/cpu) | `cpu` |
-| `MAX_CONCURRENT_JOBS` | Worker count | `2` |
-| `AI_PROVIDER` | AI backend (gemini/openai/claude/ollama/none) | `none` |
-| `AI_API_KEY` | API key for AI provider | |
-| `AI_MODEL` | AI model to use | |
-| `LICENSE_KEY` | Vastiva Pro license key | |
-| `ADMIN_PASSWORD` | Web UI password | |
-| `SCANNER_ENABLED` | Enable automatic file scanning | `false` |
-| `SCANNER_MODE` | Scan mode (manual/startup/periodic/watch/hybrid) | `manual` |
-| `SCANNER_INTERVAL_SEC` | Scan interval for periodic mode | `300` |
-| `SCANNER_AUTO_CREATE` | Auto-create jobs for discovered files | `true` |
+| `AI_PROVIDER` | AI backend (openai/claude/gemini/ollama) | `none` |
+| `AI_API_KEY` | API key for AI provider | - |
+| `AI_MODEL` | AI model to use | - |
+| `LICENSE_KEY` | Vastiva Pro license key | - |
+| `SCANNER_ENABLED` | Enable automatic scanning | `false` |
+| `SCANNER_MODE` | Scan mode (watch/periodic/hybrid) | `manual` |
 
-## API Endpoints
+### AI Provider Setup
+
+**OpenAI (Recommended for all features)**
+```env
+AI_PROVIDER=openai
+AI_API_KEY=sk-your-key-here
+AI_MODEL=gpt-4
+```
+
+**Ollama (Local, no transcription)**
+```env
+AI_PROVIDER=ollama
+AI_ENDPOINT=http://localhost:11434
+AI_MODEL=llama2
+```
+
+**Claude (No transcription support)**
+```env
+AI_PROVIDER=claude
+AI_API_KEY=sk-ant-your-key
+AI_MODEL=claude-3-opus-20240229
+```
+
+## 📡 API Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/health` | Health check |
+| `GET` | `/api/stats` | System statistics |
+| `GET` | `/api/dashboard/stats` | AI insights and analytics |
 | `GET` | `/api/jobs` | List all jobs |
 | `POST` | `/api/jobs` | Create new job |
-| `GET` | `/api/jobs/:id` | Get job by ID |
 | `DELETE` | `/api/jobs/:id` | Cancel job |
-| `GET` | `/api/config` | Get configuration |
+| `GET` | `/api/config` | Get system configuration |
+| `POST` | `/api/config` | Update configuration |
+| `GET` | `/api/scanner/config` | Get scanner settings |
+| `POST` | `/api/scanner/config` | Update scanner |
+| `GET` | `/api/search?q=query` | Natural language search |
 
-## License
+## 🔒 Security
+
+- **Path Sandboxing**: All file operations restricted to configured directories
+- **Credential Masking**: API keys and licenses masked in responses
+- **Input Validation**: Strict validation on all user inputs
+- **HTTPS Support**: Traefik integration for automatic SSL certificates
+
+See [SECURITY_AUDIT.md](SECURITY_AUDIT.md) for detailed security analysis.
+
+## 📊 Monitoring
+
+### View Logs
+```bash
+docker-compose logs -f vastiva
+```
+
+### Check Container Status
+```bash
+docker-compose ps
+```
+
+### System Resources
+Access the dashboard at `/` for real-time CPU, memory, GPU, and disk metrics.
+
+## 🛠️ Troubleshooting
+
+### GPU Not Detected
+```bash
+# Verify GPU device
+ls -la /dev/dri
+
+# Check GPU vendor setting
+docker-compose exec vastiva env | grep GPU_VENDOR
+```
+
+### AI Features Not Working
+```bash
+# Verify AI configuration
+docker-compose exec vastiva env | grep AI_
+
+# Check license status
+curl http://localhost:8091/api/config | jq '.isPremium'
+```
+
+### Scanner Not Running
+```bash
+# Check scanner configuration
+curl http://localhost:8091/api/scanner/config | jq
+
+# Verify watch directories exist and are accessible
+```
+
+## 📚 Documentation
+
+- [Deployment Guide](DEPLOYMENT.md) - Production deployment and CI/CD
+- [Security Audit](SECURITY_AUDIT.md) - Security analysis and hardening
+- [Media Processing](internal/media/README.md) - FFmpeg integration details
+- [File Scanner](internal/scanner/README.md) - Automated discovery system
+
+## 🎯 Roadmap
+
+- [x] Core transcoding engine
+- [x] Hardware acceleration
+- [x] Job queue system
+- [x] Web interface
+- [x] AI metadata cleaning
+- [x] AI adaptive encoding
+- [x] Whisper subtitles
+- [x] AI upscaling
+- [x] Natural language search
+- [x] AI-enhanced dashboard
+- [x] CI/CD pipeline
+- [ ] Multi-user support
+- [ ] Advanced scheduling
+- [ ] Webhook notifications
+
+## 📄 License
 
 Proprietary - Vastiva Pro
+
+---
+
+**Built with ❤️ using Go, React, and AI**

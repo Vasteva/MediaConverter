@@ -1,149 +1,68 @@
-# Vastiva Media Converter - GitLab CI/CD Pipeline
-
 stages:
-  - lint
-  - test
   - build
-  - docker
+  - deploy
 
 variables:
-  GO_VERSION: "1.23"
-  NODE_VERSION: "20"
-  DOCKER_IMAGE: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+  DOCKER_DRIVER: overlay2
+  DOCKER_TLS_CERTDIR: "/certs"
+  IMAGE_TAG: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+  IMAGE_LATEST: $CI_REGISTRY_IMAGE:latest
 
-# ===================
-# Cache Configuration
-# ===================
-.go-cache: &go-cache
-  cache:
-    key: go-${CI_COMMIT_REF_SLUG}
-    paths:
-      - .go/pkg/mod/
-    policy: pull-push
-
-.node-cache: &node-cache
-  cache:
-    key: node-${CI_COMMIT_REF_SLUG}
-    paths:
-      - web/node_modules/
-    policy: pull-push
-
-# ===================
-# Lint Stage
-# ===================
-go-lint:
-  stage: lint
-  image: golang:${GO_VERSION}-alpine
-  <<: *go-cache
-  variables:
-    GOPATH: $CI_PROJECT_DIR/.go
-  before_script:
-    - go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-  script:
-    - golangci-lint run --timeout=5m ./...
-  allow_failure: true # Remove once linting issues are fixed
-
-frontend-lint:
-  stage: lint
-  image: node:${NODE_VERSION}-alpine
-  <<: *node-cache
-  script:
-    - cd web
-    - npm ci --prefer-offline
-    - npm run lint
-  allow_failure: true
-
-# ===================
-# Test Stage
-# ===================
-go-test:
-  stage: test
-  image: golang:${GO_VERSION}-alpine
-  <<: *go-cache
-  variables:
-    GOPATH: $CI_PROJECT_DIR/.go
-  script:
-    - go test -v -coverprofile=coverage.out ./... || echo "No tests found"
-    - go tool cover -func=coverage.out 2>/dev/null || true
-  coverage: '/total:\s+\(statements\)\s+(\d+\.\d+)%/'
-  artifacts:
-    paths:
-      - coverage.out
-    expire_in: 1 week
-  allow_failure: true # Remove once tests are added
-
-frontend-test:
-  stage: test
-  image: node:${NODE_VERSION}-alpine
-  <<: *node-cache
-  script:
-    - cd web
-    - npm ci --prefer-offline
-    - npm run test 2>/dev/null || echo "No tests configured yet"
-  allow_failure: true
-
-# ===================
-# Build Stage
-# ===================
-build-backend:
+# Build Docker image and push to GitLab Container Registry
+build:
   stage: build
-  image: golang:${GO_VERSION}-alpine
-  <<: *go-cache
-  variables:
-    GOPATH: $CI_PROJECT_DIR/.go
-    CGO_ENABLED: "0"
-    GOOS: linux
-  script:
-    - go build -ldflags="-s -w" -o vastiva ./cmd/server
-  artifacts:
-    paths:
-      - vastiva
-    expire_in: 1 day
-
-build-frontend:
-  stage: build
-  image: node:${NODE_VERSION}-alpine
-  <<: *node-cache
-  script:
-    - cd web
-    - npm ci --prefer-offline
-    - npm run build
-  artifacts:
-    paths:
-      - web/dist/
-    expire_in: 1 day
-
-# ===================
-# Docker Stage
-# ===================
-build-image:
-  stage: docker
-  image: docker:24
+  image: docker:24-dind
   services:
-    - name: docker:24-dind
-      command: ["--insecure-registry=gitlab.wtzhome.com:5050"]
-  variables:
-    # Disable TLS for HTTP registry
-    DOCKER_TLS_CERTDIR: ""
-    DOCKER_HOST: tcp://docker:2375
-    DOCKER_DRIVER: overlay2
+    - docker:24-dind
   before_script:
-    - |
-      if [ -z "$CI_REGISTRY" ]; then
-        echo "ERROR: GitLab Container Registry not enabled!"
-        echo "Enable it at: Settings > General > Visibility > Container Registry"
-        exit 1
-      fi
-    - echo "$CI_REGISTRY_PASSWORD" | docker login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
   script:
-    - docker build -t $DOCKER_IMAGE -t $CI_REGISTRY_IMAGE:latest .
-    - docker push $DOCKER_IMAGE
-    - docker push $CI_REGISTRY_IMAGE:latest
-  dependencies:
-    - build-backend
-    - build-frontend
-  rules:
-    - if: $CI_COMMIT_BRANCH == "main"
-    - if: $CI_COMMIT_TAG
-  allow_failure: true # Remove once verified working
+    - echo "Building Docker image..."
+    - docker build -t $IMAGE_TAG -t $IMAGE_LATEST .
+    - echo "Pushing to GitLab Container Registry..."
+    - docker push $IMAGE_TAG
+    - docker push $IMAGE_LATEST
+  only:
+    - main
+    - tags
 
+# Deploy to production server
+deploy:
+  stage: deploy
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache openssh-client
+    - eval $(ssh-agent -s)
+    - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - ssh-keyscan -H $DEPLOY_HOST >> ~/.ssh/known_hosts
+  script:
+    - echo "Deploying to $DEPLOY_HOST..."
+    - |
+      ssh $DEPLOY_USER@$DEPLOY_HOST << 'ENDSSH'
+        cd /opt/vastiva
+        
+        # Login to GitLab Container Registry
+        echo $CI_REGISTRY_PASSWORD | docker login -u $CI_REGISTRY_USER --password-stdin $CI_REGISTRY
+        
+        # Pull latest image
+        docker pull $IMAGE_LATEST
+        
+        # Stop and remove old container
+        docker-compose down
+        
+        # Start new container
+        docker-compose up -d
+        
+        # Cleanup old images
+        docker image prune -af --filter "until=24h"
+        
+        echo "Deployment complete!"
+      ENDSSH
+  environment:
+    name: production
+    url: https://vastiva.wtzhome.com
+  only:
+    - main
+  when: manual

@@ -1,6 +1,6 @@
 services:
   vastiva:
-    build: .
+    image: ${CI_REGISTRY_IMAGE:-vastiva/mediaconverter}:latest
     container_name: vastiva
     environment:
       - PORT=80
@@ -9,13 +9,35 @@ services:
       - GPU_VENDOR=${GPU_VENDOR:-cpu}
       - AI_PROVIDER=${AI_PROVIDER:-none}
       - AI_API_KEY=${AI_API_KEY:-}
+      - AI_ENDPOINT=${AI_ENDPOINT:-}
+      - AI_MODEL=${AI_MODEL:-}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - LICENSE_KEY=${LICENSE_KEY:-}
+      - SCANNER_ENABLED=${SCANNER_ENABLED:-false}
+      - SCANNER_MODE=${SCANNER_MODE:-manual}
+      - SCANNER_PROCESSED_FILE=/data/processed.json
     volumes:
       - ${MEDIA_ROOT:-/mnt/media}:/storage
       - ${MEDIA_ROOT:-/mnt/media}/output:/output
+      - vastiva-data:/data
     devices:
       - /dev/dri:/dev/dri
     ports:
       - "8091:80"
     restart: unless-stopped
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.vastiva.rule=Host(`vastiva.wtzhome.com`)"
+      - "traefik.http.routers.vastiva.entrypoints=websecure"
+      - "traefik.http.routers.vastiva.tls.certresolver=letsencrypt"
+      - "traefik.http.services.vastiva.loadbalancer.server.port=80"
+
+volumes:
+  vastiva-data:
+    driver: local
+
+networks:
+  traefik:
+    external: true

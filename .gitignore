@@ -1,63 +1,50 @@
-# ==========================
-# Go
-# ==========================
 # Binaries
 vastiva
+vastiva_*
 *.exe
-*.exe~
 *.dll
 *.so
 *.dylib
-
-# Test binary
 *.test
 
-# Go coverage
-*.out
-coverage.html
-
-# Go workspace
-go.work
-go.work.sum
-
-# Dependency directories
-vendor/
-
-# ==========================
-# Node.js / Frontend
-# ==========================
-web/node_modules/
-web/dist/
-web/.vite/
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# ==========================
-# Environment & Secrets
-# ==========================
+# Environment files
 .env
 .env.local
 .env.*.local
-*.pem
-*.key
 
-# ==========================
-# IDE / Editor
-# ==========================
-.idea/
+# IDE
 .vscode/
+.idea/
 *.swp
 *.swo
 *~
+
+# OS
 .DS_Store
 Thumbs.db
 
-# ==========================
-# Build / Cache
-# ==========================
-tmp/
-.cache/
-*.code-workspace
-vastiva_*
+# Logs
+*.log
+logs/
+
+# Data
+/data/
+processed.json
+
+# Build artifacts
+/web/dist/
+/web/node_modules/
+/web/.vite/
+
+# Go
+vendor/
+go.work
+go.work.sum
+
+# Docker
+docker-compose.override.yml
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
