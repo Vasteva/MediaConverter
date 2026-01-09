@@ -67,12 +67,15 @@ type Manager struct {
 func NewManager(maxConcurrent int, cfg *config.Config) (*Manager, error) {
 	ffmpeg, err := media.NewFFmpegWrapper()
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize FFmpeg: %w", err)
+		log.Printf("Warning: FFmpeg not available: %v", err)
+		log.Println("Optimization jobs will not be available")
+		// FFmpeg is optional, continue without it
 	}
 
 	makemkv, err := media.NewMakeMKVWrapper()
 	if err != nil {
 		log.Printf("Warning: MakeMKV not available: %v", err)
+		log.Println("Extraction jobs will not be available")
 		// MakeMKV is optional, continue without it
 	}
 
@@ -218,6 +221,10 @@ func (m *Manager) runExtraction(job *Job) error {
 }
 
 func (m *Manager) runOptimization(job *Job) error {
+	if m.ffmpeg == nil {
+		return fmt.Errorf("FFmpeg is not available - cannot run optimization jobs")
+	}
+
 	log.Printf("[Job %s] Starting optimization: %s", job.ID, job.SourcePath)
 
 	// Verify input file exists
