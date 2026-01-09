@@ -29,6 +29,7 @@ type JobType string
 const (
 	JobTypeExtract  JobType = "extract"
 	JobTypeOptimize JobType = "optimize"
+	JobTypeTest     JobType = "test"
 )
 
 type Job struct {
@@ -161,6 +162,8 @@ func (m *Manager) processJob(job *Job) {
 		err = m.runExtraction(job)
 	case JobTypeOptimize:
 		err = m.runOptimization(job)
+	case JobTypeTest:
+		err = m.runTest(job)
 	}
 
 	if err != nil {
@@ -291,4 +294,52 @@ func (m *Manager) runOptimization(job *Job) error {
 	log.Printf("[Job %s] Optimization completed successfully: %s", job.ID, outputPath)
 
 	return nil
+}
+
+func (m *Manager) runTest(job *Job) error {
+	log.Printf("[Job %s] Starting test job: %s", job.ID, job.SourcePath)
+
+	totalSteps := 100
+	duration := 20 * time.Second // 20 seconds total duration
+	stepDuration := duration / time.Duration(totalSteps)
+
+	// Simulate progress
+	for i := 0; i <= totalSteps; i++ {
+		// Check for cancellation
+		select {
+		case <-job.ctx.Done():
+			return fmt.Errorf("job cancelled")
+		default:
+			// Continue
+		}
+
+		job.Progress = i
+		job.FPS = 60.0
+
+		// Calculate fake ETA
+		remainingSteps := totalSteps - i
+		etaDuration := time.Duration(remainingSteps) * stepDuration
+		job.ETA = formatDuration(etaDuration)
+
+		if i%10 == 0 {
+			log.Printf("[Job %s] Progress: %d%% | FPS: %.1f | ETA: %s", job.ID, job.Progress, job.FPS, job.ETA)
+		}
+
+		time.Sleep(stepDuration)
+	}
+
+	job.Progress = 100
+	job.ETA = "00:00:00"
+	log.Printf("[Job %s] Test job completed successfully", job.ID)
+	return nil
+}
+
+func formatDuration(d time.Duration) string {
+	d = d.Round(time.Second)
+	h := d / time.Hour
+	d -= h * time.Hour
+	m := d / time.Minute
+	d -= m * time.Minute
+	s := d / time.Second
+	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
 }
