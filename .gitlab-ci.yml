@@ -13,9 +13,13 @@ build:
   stage: build
   image: docker:24-dind
   services:
-    - docker:24-dind
+    - name: docker:24-dind
+      command: ["--insecure-registry=gitlab.wtzhome.com:5050"]
   before_script:
-    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - echo "Configuring Docker for insecure registry..."
+    - mkdir -p /etc/docker
+    - echo '{"insecure-registries":["gitlab.wtzhome.com:5050"]}' > /etc/docker/daemon.json
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin gitlab.wtzhome.com:5050
   script:
     - echo "Building Docker image..."
     - docker build -t $IMAGE_TAG -t $IMAGE_LATEST .
