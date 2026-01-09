@@ -33,10 +33,11 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 
 	api.Post("/jobs", func(c *fiber.Ctx) error {
 		var req struct {
-			Type       jobs.JobType `json:"type"`
-			SourcePath string       `json:"sourcePath"`
-			DestPath   string       `json:"destinationPath"`
-			Priority   int          `json:"priority"`
+			Type            jobs.JobType `json:"type"`
+			SourcePath      string       `json:"sourcePath"`
+			DestPath        string       `json:"destinationPath"`
+			Priority        int          `json:"priority"`
+			CreateSubtitles bool         `json:"createSubtitles"`
 		}
 		if err := c.BodyParser(&req); err != nil {
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
@@ -49,6 +50,7 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			DestinationPath: req.DestPath,
 			Status:          jobs.StatusPending,
 			Priority:        req.Priority,
+			CreateSubtitles: req.CreateSubtitles,
 			CreatedAt:       time.Now(),
 		}
 		jm.AddJob(job)

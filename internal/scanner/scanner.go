@@ -40,12 +40,13 @@ type WatchDirectory struct {
 
 // ScannerConfig holds all scanner configuration
 type ScannerConfig struct {
-	Mode              ScanMode         `json:"mode"`
-	Enabled           bool             `json:"enabled"`
-	WatchDirectories  []WatchDirectory `json:"watchDirectories"`
-	ScanIntervalSec   int              `json:"scanIntervalSec"` // For periodic mode
-	AutoCreateJobs    bool             `json:"autoCreateJobs"`
-	ProcessedFilePath string           `json:"processedFilePath"` // Track processed files
+	Mode                ScanMode         `json:"mode"`
+	Enabled             bool             `json:"enabled"`
+	WatchDirectories    []WatchDirectory `json:"watchDirectories"`
+	ScanIntervalSec     int              `json:"scanIntervalSec"` // For periodic mode
+	AutoCreateJobs      bool             `json:"autoCreateJobs"`
+	AutoCreateSubtitles bool             `json:"autoCreateSubtitles"`
+	ProcessedFilePath   string           `json:"processedFilePath"` // Track processed files
 
 	// Job creation settings
 	DefaultPriority int    `json:"defaultPriority"`
@@ -410,6 +411,7 @@ func (s *Scanner) createJobForFile(path string) error {
 		DestinationPath: outputPath,
 		Status:          jobs.StatusPending,
 		Priority:        s.config.DefaultPriority,
+		CreateSubtitles: s.config.AutoCreateSubtitles,
 		CreatedAt:       time.Now(),
 	}
 

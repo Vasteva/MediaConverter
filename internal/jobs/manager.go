@@ -11,6 +11,7 @@ import (
 
 	"github.com/rwurtz/vastiva/internal/ai"
 	"github.com/rwurtz/vastiva/internal/ai/meta"
+	"github.com/rwurtz/vastiva/internal/ai/whisper"
 	"github.com/rwurtz/vastiva/internal/config"
 	"github.com/rwurtz/vastiva/internal/media"
 )
@@ -47,6 +48,7 @@ type Job struct {
 	StartedAt       time.Time `json:"startedAt,omitempty"`
 	CompletedAt     time.Time `json:"completedAt,omitempty"`
 	Error           string    `json:"error,omitempty"`
+	CreateSubtitles bool      `json:"createSubtitles"` // Premium feature
 
 	// Internal
 	ctx    context.Context
@@ -234,11 +236,28 @@ func (m *Manager) runOptimization(job *Job) error {
 		TotalDuration: info.Duration,
 	}
 
-	return m.ffmpeg.TranscodeWithProgress(job.ctx, opts, func(p media.TranscodeProgress) {
+	err = m.ffmpeg.TranscodeWithProgress(job.ctx, opts, func(p media.TranscodeProgress) {
 		job.Progress = p.Percentage
 		job.FPS = p.FPS
 		job.ETA = p.ETA
 	})
+	if err != nil {
+		return err
+	}
+
+	// 3. Premium Feature: AI Whisper Subtitles
+	if m.config.IsPremium && job.CreateSubtitles && m.ai != nil {
+		log.Printf("[Premium] Running Whisper subtitle generation...")
+		generator := whisper.NewGenerator(m.ai)
+		if srtPath, sErr := generator.GenerateSRT(job.ctx, job.DestinationPath); sErr != nil {
+			log.Printf("Warning: Whisper subtitle generation failed: %v", sErr)
+			// Don't fail the whole job just because subtitles failed
+		} else {
+			log.Printf("[Premium] Subtitles generated: %s", srtPath)
+		}
+	}
+
+	return nil
 }
 
 func (m *Manager) runTest(job *Job) error {

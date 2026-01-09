@@ -17,6 +17,7 @@ export default function JobList({ jobs, onCreateJob, onCancelJob }: JobListProps
     const [newJobType, setNewJobType] = useState<'optimize' | 'extract' | 'test'>('optimize');
     const [sourcePath, setSourcePath] = useState('');
     const [destPath, setDestPath] = useState('');
+    const [createSubtitles, setCreateSubtitles] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     const filteredJobs = jobs.filter(job => {
@@ -35,7 +36,8 @@ export default function JobList({ jobs, onCreateJob, onCancelJob }: JobListProps
             type: newJobType,
             sourcePath,
             destinationPath: destPath || undefined,
-            priority: 5
+            priority: 5,
+            createSubtitles
         });
 
         setIsSubmitting(false);
@@ -109,9 +111,19 @@ export default function JobList({ jobs, onCreateJob, onCancelJob }: JobListProps
                                 filteredJobs.map(job => (
                                     <tr key={job.id}>
                                         <td>
-                                            <span className={`badge badge-${job.type}`}>
-                                                {job.type}
-                                            </span>
+                                            <div className="flex flex-col gap-1">
+                                                <span className={`badge badge-${job.type}`}>
+                                                    {job.type}
+                                                </span>
+                                                {job.createSubtitles && (
+                                                    <div className="flex items-center text-[10px] text-primary gap-1 opacity-80">
+                                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ width: '10px', height: '10px' }}>
+                                                            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2v10z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                                                        </svg>
+                                                        WHISPER
+                                                    </div>
+                                                )}
+                                            </div>
                                         </td>
                                         <td>
                                             <div className="flex flex-col">
@@ -222,6 +234,24 @@ export default function JobList({ jobs, onCreateJob, onCancelJob }: JobListProps
                                     />
                                     <p className="text-xs text-secondary mt-1">
                                         Leave empty to auto-generate based on source.
+                                    </p>
+                                </div>
+
+                                <div className="form-group mb-4">
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={createSubtitles}
+                                            onChange={e => setCreateSubtitles(e.target.checked)}
+                                            className="w-4 h-4"
+                                        />
+                                        <div className="flex items-center">
+                                            <span className="text-sm font-medium">Create AI Subtitles (Whisper)</span>
+                                            <span className="pro-tag ml-2">PRO</span>
+                                        </div>
+                                    </label>
+                                    <p className="text-xs text-secondary mt-1 ml-6">
+                                        Automatically generate SRT subtitles using AI transcription.
                                     </p>
                                 </div>
                             </div>

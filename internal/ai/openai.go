@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
 )
 
 type OpenAIProvider struct {
@@ -82,4 +85,54 @@ func (p *OpenAIProvider) Analyze(ctx context.Context, prompt string) (string, er
 	}
 
 	return "", fmt.Errorf("no response from openai")
+}
+func (p *OpenAIProvider) Transcribe(ctx context.Context, audioPath string) (string, error) {
+	url := fmt.Sprintf("%s/audio/transcriptions", p.Endpoint)
+
+	// Create multipart body
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	// Add file
+	file, err := os.Open(audioPath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	part, err := writer.CreateFormFile("file", filepath.Base(audioPath))
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(part, file); err != nil {
+		return "", err
+	}
+
+	// Add other fields
+	_ = writer.WriteField("model", "whisper-1")
+	_ = writer.WriteField("response_format", "srt")
+
+	if err := writer.Close(); err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, body)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", p.APIKey))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("openai transcription error (%d): %s", resp.StatusCode, string(respBody))
+	}
+
+	return string(respBody), nil
 }

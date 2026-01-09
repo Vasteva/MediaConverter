@@ -112,7 +112,7 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
                             />
                         </div>
 
-                        <div className="form-group">
+                        <div className="form-group mb-4">
                             <label className="label mb-2 block">Auto-Create Jobs</label>
                             <label className="flex items-center gap-2 cursor-pointer">
                                 <input
@@ -122,6 +122,22 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
                                     className="w-4 h-4"
                                 />
                                 <span className="text-secondary text-sm">Automatically queue jobs when files are found</span>
+                            </label>
+                        </div>
+
+                        <div className="form-group">
+                            <label className="label mb-2 block flex items-center">
+                                AI Subtitles (Whisper)
+                                <span className="pro-tag ml-2">PRO</span>
+                            </label>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={config.autoCreateSubtitles}
+                                    onChange={e => setConfig({ ...config, autoCreateSubtitles: e.target.checked })}
+                                    className="w-4 h-4"
+                                />
+                                <span className="text-secondary text-sm">Generate AI subtitles using Whisper for new jobs</span>
                             </label>
                         </div>
                     </div>

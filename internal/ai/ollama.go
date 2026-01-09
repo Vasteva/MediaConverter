@@ -69,3 +69,6 @@ func (p *OllamaProvider) Analyze(ctx context.Context, prompt string) (string, er
 
 	return result.Response, nil
 }
+func (p *OllamaProvider) Transcribe(ctx context.Context, audioPath string) (string, error) {
+	return "", fmt.Errorf("transcription not supported by Ollama provider")
+}

@@ -9,6 +9,8 @@ import (
 type Provider interface {
 	// Analyze asks the AI to analyze a prompt (optionally with context)
 	Analyze(ctx context.Context, prompt string) (string, error)
+	// Transcribe converts audio/video to text (SRT format preferred)
+	Transcribe(ctx context.Context, audioPath string) (string, error)
 	// GetName returns the provider name
 	GetName() string
 }

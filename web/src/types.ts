@@ -12,6 +12,7 @@ export interface Job {
     startedAt?: string;
     completedAt?: string;
     error?: string;
+    createSubtitles?: boolean;
 }
 
 export interface SystemConfig {
@@ -43,6 +44,7 @@ export interface ScannerConfig {
     watchDirectories: WatchDirectory[];
     scanIntervalSec: number;
     autoCreateJobs: boolean;
+    autoCreateSubtitles: boolean;
     processedFilePath: string;
     defaultPriority: number;
     outputDirectory: string;

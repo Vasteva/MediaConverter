@@ -79,3 +79,6 @@ func (p *ClaudeProvider) Analyze(ctx context.Context, prompt string) (string, er
 
 	return "", fmt.Errorf("no response from claude")
 }
+func (p *ClaudeProvider) Transcribe(ctx context.Context, audioPath string) (string, error) {
+	return "", fmt.Errorf("transcription not supported by Claude provider")
+}

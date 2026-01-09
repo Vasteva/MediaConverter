@@ -82,3 +82,6 @@ func (p *GeminiProvider) Analyze(ctx context.Context, prompt string) (string, er
 
 	return "", fmt.Errorf("no response from gemini")
 }
+func (p *GeminiProvider) Transcribe(ctx context.Context, audioPath string) (string, error) {
+	return "", fmt.Errorf("transcription for Gemini is coming soon (requires File API upload)")
+}
