@@ -15,17 +15,18 @@ build:
   services:
     - name: docker:24-dind
       command: ["--insecure-registry=gitlab.wtzhome.com:5050"]
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: ""
   before_script:
-    - echo "Configuring Docker for insecure registry..."
-    - mkdir -p /etc/docker
-    - echo '{"insecure-registries":["gitlab.wtzhome.com:5050"]}' > /etc/docker/daemon.json
-    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin gitlab.wtzhome.com:5050
+    - echo "Logging into GitLab Container Registry (HTTP)..."
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin http://gitlab.wtzhome.com:5050
   script:
     - echo "Building Docker image..."
-    - docker build -t $IMAGE_TAG -t $IMAGE_LATEST .
+    - docker build -t http://gitlab.wtzhome.com:5050/vastiva/mediaconverter:$CI_COMMIT_SHORT_SHA -t http://gitlab.wtzhome.com:5050/vastiva/mediaconverter:latest .
     - echo "Pushing to GitLab Container Registry..."
-    - docker push $IMAGE_TAG
-    - docker push $IMAGE_LATEST
+    - docker push http://gitlab.wtzhome.com:5050/vastiva/mediaconverter:$CI_COMMIT_SHORT_SHA
+    - docker push http://gitlab.wtzhome.com:5050/vastiva/mediaconverter:latest
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
     - if: $CI_COMMIT_TAG
