@@ -2,10 +2,16 @@ package jobs
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/rwurtz/vastiva/internal/config"
+	"github.com/rwurtz/vastiva/internal/media"
 )
 
 type Status string
@@ -53,15 +59,32 @@ type Manager struct {
 	mu            sync.RWMutex
 	wg            sync.WaitGroup
 	stopCh        chan struct{}
+	config        *config.Config
+	ffmpeg        *media.FFmpegWrapper
+	makemkv       *media.MakeMKVWrapper
 }
 
-func NewManager(maxConcurrent int) *Manager {
+func NewManager(maxConcurrent int, cfg *config.Config) (*Manager, error) {
+	ffmpeg, err := media.NewFFmpegWrapper()
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize FFmpeg: %w", err)
+	}
+
+	makemkv, err := media.NewMakeMKVWrapper()
+	if err != nil {
+		log.Printf("Warning: MakeMKV not available: %v", err)
+		// MakeMKV is optional, continue without it
+	}
+
 	return &Manager{
 		jobs:          make(map[string]*Job),
 		queue:         make(chan *Job, 1000),
 		maxConcurrent: maxConcurrent,
 		stopCh:        make(chan struct{}),
-	}
+		config:        cfg,
+		ffmpeg:        ffmpeg,
+		makemkv:       makemkv,
+	}, nil
 }
 
 func (m *Manager) Start() {
@@ -148,13 +171,117 @@ func (m *Manager) processJob(job *Job) {
 }
 
 func (m *Manager) runExtraction(job *Job) error {
-	// TODO: Implement MakeMKV extraction
-	log.Printf("[Job %s] Running extraction: %s", job.ID, job.SourcePath)
+	if m.makemkv == nil {
+		return fmt.Errorf("MakeMKV is not available")
+	}
+
+	log.Printf("[Job %s] Starting extraction: %s", job.ID, job.SourcePath)
+
+	// Scan the disc first
+	discInfo, err := m.makemkv.ScanDisc(job.ctx, job.SourcePath)
+	if err != nil {
+		return fmt.Errorf("failed to scan disc: %w", err)
+	}
+
+	log.Printf("[Job %s] Found %d titles on disc: %s", job.ID, len(discInfo.Titles), discInfo.Name)
+
+	// Determine which title to extract
+	titleIndex := discInfo.FindLargestTitle()
+	if titleIndex == 0 && len(discInfo.Titles) > 0 {
+		titleIndex = discInfo.Titles[0].Index
+	}
+
+	// Create output directory if it doesn't exist
+	if err := os.MkdirAll(job.DestinationPath, 0755); err != nil {
+		return fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	// Extract the title
+	extractOpts := media.ExtractOptions{
+		SourcePath: job.SourcePath,
+		OutputDir:  job.DestinationPath,
+		TitleIndex: titleIndex,
+		MinLength:  300, // 5 minutes minimum
+	}
+
+	job.Progress = 10
+	log.Printf("[Job %s] Extracting title %d...", job.ID, titleIndex)
+
+	if err := m.makemkv.Extract(job.ctx, extractOpts); err != nil {
+		return fmt.Errorf("extraction failed: %w", err)
+	}
+
+	job.Progress = 100
+	log.Printf("[Job %s] Extraction completed successfully", job.ID)
+
 	return nil
 }
 
 func (m *Manager) runOptimization(job *Job) error {
-	// TODO: Implement FFmpeg optimization
-	log.Printf("[Job %s] Running optimization: %s", job.ID, job.SourcePath)
+	log.Printf("[Job %s] Starting optimization: %s", job.ID, job.SourcePath)
+
+	// Verify input file exists
+	if _, err := os.Stat(job.SourcePath); os.IsNotExist(err) {
+		return fmt.Errorf("source file does not exist: %s", job.SourcePath)
+	}
+
+	// Get media info to calculate progress
+	mediaInfo, err := m.ffmpeg.GetMediaInfo(job.ctx, job.SourcePath)
+	if err != nil {
+		log.Printf("[Job %s] Warning: Could not get media info: %v", job.ID, err)
+	}
+
+	// Determine output path
+	outputPath := job.DestinationPath
+	if outputPath == "" {
+		// Generate output path based on source
+		dir := filepath.Dir(job.SourcePath)
+		base := filepath.Base(job.SourcePath)
+		ext := filepath.Ext(base)
+		name := base[:len(base)-len(ext)]
+		outputPath = filepath.Join(dir, name+"_optimized.mkv")
+	}
+
+	// Create output directory if needed
+	outputDir := filepath.Dir(outputPath)
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	// Configure transcoding options
+	transcodeOpts := media.TranscodeOptions{
+		InputPath:  job.SourcePath,
+		OutputPath: outputPath,
+		GPUVendor:  media.GPUVendor(m.config.GPUVendor),
+		Preset:     media.QualityPreset(m.config.QualityPreset),
+		CRF:        m.config.CRF,
+		AudioCodec: "copy",
+		Container:  "mkv",
+	}
+
+	// Progress callback
+	progressCallback := func(progress media.TranscodeProgress) {
+		job.FPS = progress.FPS
+
+		// Calculate percentage if we have duration
+		if mediaInfo != nil && mediaInfo.Duration > 0 {
+			job.Progress = media.CalculatePercentage(progress.Time, mediaInfo.Duration)
+			job.ETA = media.EstimateETA(progress.Time, mediaInfo.Duration, progress.Speed)
+		}
+
+		log.Printf("[Job %s] Progress: %d%% | FPS: %.1f | Speed: %s | ETA: %s",
+			job.ID, job.Progress, job.FPS, progress.Speed, job.ETA)
+	}
+
+	// Run transcoding with progress monitoring
+	log.Printf("[Job %s] Starting transcoding with %s acceleration...", job.ID, m.config.GPUVendor)
+	if err := m.ffmpeg.TranscodeWithProgress(job.ctx, transcodeOpts, progressCallback); err != nil {
+		return fmt.Errorf("transcoding failed: %w", err)
+	}
+
+	job.Progress = 100
+	job.ETA = "00:00:00"
+	log.Printf("[Job %s] Optimization completed successfully: %s", job.ID, outputPath)
+
 	return nil
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/rwurtz/vastiva/internal/api"
 	"github.com/rwurtz/vastiva/internal/config"
 	"github.com/rwurtz/vastiva/internal/jobs"
+	"github.com/rwurtz/vastiva/internal/scanner"
 )
 
 func main() {
@@ -24,8 +25,33 @@ func main() {
 	cfg := config.Load()
 
 	// Initialize job manager
-	jobManager := jobs.NewManager(cfg.MaxConcurrentJobs)
+	jobManager, err := jobs.NewManager(cfg.MaxConcurrentJobs, cfg)
+	if err != nil {
+		log.Fatalf("Failed to initialize job manager: %v", err)
+	}
 	go jobManager.Start()
+
+	// Initialize file scanner
+	watchDirsFile := os.Getenv("SCANNER_CONFIG_FILE")
+	if watchDirsFile == "" {
+		watchDirsFile = "./scanner-config.json"
+	}
+
+	scannerCfg, err := scanner.LoadScannerConfig(cfg, watchDirsFile)
+	if err != nil {
+		log.Printf("Warning: Failed to load scanner config: %v", err)
+		log.Println("Scanner will be disabled")
+		scannerCfg = &scanner.ScannerConfig{Enabled: false}
+	}
+
+	fileScanner, err := scanner.NewScanner(scannerCfg, jobManager)
+	if err != nil {
+		log.Printf("Warning: Failed to initialize scanner: %v", err)
+	} else if scannerCfg.Enabled {
+		if err := fileScanner.Start(); err != nil {
+			log.Printf("Warning: Failed to start scanner: %v", err)
+		}
+	}
 
 	// Initialize Fiber app
 	app := fiber.New(fiber.Config{
@@ -48,6 +74,9 @@ func main() {
 	go func() {
 		<-c
 		log.Println("Shutting down gracefully...")
+		if fileScanner != nil {
+			fileScanner.Stop()
+		}
 		jobManager.Stop()
 		_ = app.Shutdown()
 	}()
