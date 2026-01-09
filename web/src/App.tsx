@@ -4,12 +4,13 @@ import Header from './components/Header';
 import Dashboard from './components/Dashboard';
 import JobList from './components/JobList';
 import ScannerConfigComponent from './components/ScannerConfig';
+import Search from './components/Search';
 import Settings from './components/Settings';
 import type { Job, SystemConfig, ScannerConfig, SystemStats } from './types';
 
 function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>('dark');
-  const [currentView, setCurrentView] = useState<'dashboard' | 'jobs' | 'scanner' | 'settings'>('dashboard');
+  const [currentView, setCurrentView] = useState<'dashboard' | 'jobs' | 'scanner' | 'search' | 'settings'>('dashboard');
   const [jobs, setJobs] = useState<Job[]>([]);
   const [config, setConfig] = useState<SystemConfig | null>(null);
   const [scannerConfig, setScannerConfig] = useState<ScannerConfig | null>(null);
@@ -213,6 +214,9 @@ function App() {
             config={scannerConfig}
             onSave={updateScannerConfig}
           />
+        )}
+        {currentView === 'search' && (
+          <Search />
         )}
         {currentView === 'settings' && (
           <Settings

@@ -2,10 +2,12 @@ package api
 
 import (
 	"log"
+	"path/filepath"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/rwurtz/vastiva/internal/ai"
+	"github.com/rwurtz/vastiva/internal/ai/search"
 	"github.com/rwurtz/vastiva/internal/config"
 	"github.com/rwurtz/vastiva/internal/jobs"
 	"github.com/rwurtz/vastiva/internal/license"
@@ -167,6 +169,56 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		}
 
 		return c.JSON(fiber.Map{"success": true})
+	})
+
+	// AI Search
+	api.Get("/search", func(c *fiber.Ctx) error {
+		query := c.Query("q")
+		if query == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "Query is required"})
+		}
+
+		if !cfg.IsPremium {
+			return c.Status(403).JSON(fiber.Map{"error": "AI Search is a premium feature"})
+		}
+
+		aiProv := jm.GetAI()
+		if aiProv == nil {
+			return c.Status(500).JSON(fiber.Map{"error": "AI provider not configured"})
+		}
+
+		// 1. Get all processed files
+		files := fs.GetProcessedFiles()
+		searchItems := make([]search.MediaItem, len(files))
+		for i, f := range files {
+			searchItems[i] = search.MediaItem{
+				ID:    f.JobID,
+				Title: filepath.Base(f.Path),
+				Path:  f.Path,
+			}
+		}
+
+		// 2. Perform AI match
+		searcher := search.NewSearcher(aiProv)
+		matchingIDs, err := searcher.Match(c.Context(), query, searchItems)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		// 3. Map back to ProcessedFile objects
+		results := []scanner.ProcessedFile{}
+		idMap := make(map[string]scanner.ProcessedFile)
+		for _, f := range files {
+			idMap[f.JobID] = f
+		}
+
+		for _, id := range matchingIDs {
+			if f, ok := idMap[id]; ok {
+				results = append(results, f)
+			}
+		}
+
+		return c.JSON(results)
 	})
 }
 

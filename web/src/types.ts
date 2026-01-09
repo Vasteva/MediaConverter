@@ -63,3 +63,11 @@ export interface SystemStats {
     gpuTemp: number;
     diskFreeGB: number;
 }
+
+export interface ProcessedFile {
+    path: string;
+    hash: string;
+    processedAt: string;
+    jobId: string;
+    jobType: string;
+}

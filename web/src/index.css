@@ -658,3 +658,22 @@ a:hover {
   height: 40px;
   border-width: 3px;
 }
+
+/* Search View Styles */
+.search-view {
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.result-card {
+  border-left: 4px solid transparent;
+}
+
+.result-card:hover {
+  border-left-color: var(--brand-teal);
+  transform: translateX(4px);
+}
+
+.transition-all {
+  transition: all 0.2s ease-in-out;
+}

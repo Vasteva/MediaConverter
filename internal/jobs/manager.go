@@ -108,6 +108,11 @@ func (m *Manager) Stop() {
 	log.Println("Job manager stopped")
 }
 
+// GetAI returns the current AI provider
+func (m *Manager) GetAI() ai.Provider {
+	return m.ai
+}
+
 func (m *Manager) worker(id int) {
 	defer m.wg.Done()
 	for {

@@ -211,6 +211,11 @@ func (s *Scanner) GetConfig() *ScannerConfig {
 	return s.config
 }
 
+// GetProcessedFiles returns all files processed by the scanner
+func (s *Scanner) GetProcessedFiles() []ProcessedFile {
+	return s.processedDB.GetAll()
+}
+
 // UpdateConfig updates the scanner configuration and restarts if necessary
 func (s *Scanner) UpdateConfig(newCfg *ScannerConfig) error {
 	s.mu.Lock()
@@ -654,6 +659,18 @@ func (db *ProcessedDB) IsProcessed(path string) bool {
 
 	_, exists := db.processed[path]
 	return exists
+}
+
+// GetAll returns all processed files
+func (db *ProcessedDB) GetAll() []ProcessedFile {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	files := make([]ProcessedFile, 0, len(db.processed))
+	for _, f := range db.processed {
+		files = append(files, f)
+	}
+	return files
 }
 
 // MarkProcessed marks a file as processed
