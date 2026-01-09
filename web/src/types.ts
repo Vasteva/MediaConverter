@@ -13,6 +13,8 @@ export interface Job {
     completedAt?: string;
     error?: string;
     createSubtitles?: boolean;
+    upscale?: boolean;
+    resolution?: string;
 }
 
 export interface SystemConfig {
@@ -45,6 +47,8 @@ export interface ScannerConfig {
     scanIntervalSec: number;
     autoCreateJobs: boolean;
     autoCreateSubtitles: boolean;
+    autoUpscale: boolean;
+    autoResolution: string;
     processedFilePath: string;
     defaultPriority: number;
     outputDirectory: string;

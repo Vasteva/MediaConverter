@@ -18,6 +18,8 @@ export default function JobList({ jobs, onCreateJob, onCancelJob }: JobListProps
     const [sourcePath, setSourcePath] = useState('');
     const [destPath, setDestPath] = useState('');
     const [createSubtitles, setCreateSubtitles] = useState(false);
+    const [upscale, setUpscale] = useState(false);
+    const [resolution, setResolution] = useState('1080p');
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     const filteredJobs = jobs.filter(job => {
@@ -37,7 +39,9 @@ export default function JobList({ jobs, onCreateJob, onCancelJob }: JobListProps
             sourcePath,
             destinationPath: destPath || undefined,
             priority: 5,
-            createSubtitles
+            createSubtitles,
+            upscale,
+            resolution
         });
 
         setIsSubmitting(false);
@@ -121,6 +125,14 @@ export default function JobList({ jobs, onCreateJob, onCancelJob }: JobListProps
                                                             <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2v10z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                                                         </svg>
                                                         WHISPER
+                                                    </div>
+                                                )}
+                                                {job.upscale && (
+                                                    <div className="flex items-center text-[10px] text-primary gap-1 opacity-80">
+                                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ width: '10px', height: '10px' }}>
+                                                            <path d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                                                        </svg>
+                                                        UPSCALE: {job.resolution}
                                                     </div>
                                                 )}
                                             </div>
@@ -253,6 +265,37 @@ export default function JobList({ jobs, onCreateJob, onCancelJob }: JobListProps
                                     <p className="text-xs text-secondary mt-1 ml-6">
                                         Automatically generate SRT subtitles using AI transcription.
                                     </p>
+                                </div>
+
+                                <div className="form-group mb-4">
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={upscale}
+                                            onChange={e => setUpscale(e.target.checked)}
+                                            className="w-4 h-4"
+                                        />
+                                        <div className="flex items-center">
+                                            <span className="text-sm font-medium">AI Upscaling (Super Resolution)</span>
+                                            <span className="pro-tag ml-2">PRO</span>
+                                        </div>
+                                    </label>
+                                    <p className="text-xs text-secondary mt-1 ml-6">
+                                        Upscale video to higher resolution using AI enhancers.
+                                    </p>
+
+                                    {upscale && (
+                                        <div className="mt-2 ml-6">
+                                            <select
+                                                className="input select text-sm"
+                                                value={resolution}
+                                                onChange={e => setResolution(e.target.value)}
+                                            >
+                                                <option value="1080p">Target: 1080p (FHD)</option>
+                                                <option value="4k">Target: 4K (UHD)</option>
+                                            </select>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                             <div className="modal-footer flexjustify-end gap-2">

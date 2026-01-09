@@ -140,6 +140,35 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
                                 <span className="text-secondary text-sm">Generate AI subtitles using Whisper for new jobs</span>
                             </label>
                         </div>
+
+                        <div className="form-group">
+                            <label className="label mb-2 block flex items-center">
+                                AI Upscaling (Super Resolution)
+                                <span className="pro-tag ml-2">PRO</span>
+                            </label>
+                            <div className="flex flex-col gap-2">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={config.autoUpscale}
+                                        onChange={e => setConfig({ ...config, autoUpscale: e.target.checked })}
+                                        className="w-4 h-4"
+                                    />
+                                    <span className="text-secondary text-sm">Automatically upscale low-res content</span>
+                                </label>
+
+                                {config.autoUpscale && (
+                                    <select
+                                        className="input select text-xs"
+                                        value={config.autoResolution}
+                                        onChange={e => setConfig({ ...config, autoResolution: e.target.value })}
+                                    >
+                                        <option value="1080p">Target: 1080p (FHD)</option>
+                                        <option value="4k">Target: 4K (UHD)</option>
+                                    </select>
+                                )}
+                            </div>
+                        </div>
                     </div>
                 </div>
 

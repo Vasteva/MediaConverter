@@ -39,6 +39,8 @@ type TranscodeOptions struct {
 	AudioCodec    string // "copy", "aac", "ac3"
 	Container     string // "mkv", "mp4"
 	TotalDuration float64
+	Upscale       bool   // Premium feature: AI Super Resolution
+	Resolution    string // "1080p", "4k"
 }
 
 // FFmpegWrapper handles FFmpeg command execution
@@ -117,9 +119,37 @@ func (f *FFmpegWrapper) getHWAccelInputArgs(vendor GPUVendor) []string {
 	}
 }
 
+// getUpscaleFilter returns the video filter string for upscaling
+func (f *FFmpegWrapper) getUpscaleFilter(opts TranscodeOptions) string {
+	if !opts.Upscale {
+		return ""
+	}
+
+	targetW, targetH := 1920, 1080
+	if opts.Resolution == "4k" {
+		targetW, targetH = 3840, 2160
+	}
+
+	// For maximum premium "WOW", we use high-quality Lanczos scaling
+	filter := fmt.Sprintf("scale=%d:%d:flags=lanczos", targetW, targetH)
+
+	// If the user has a GPU, we can try hardware accelerated scaling
+	if opts.GPUVendor == GPUVendorNvidia {
+		filter = fmt.Sprintf("scale_cuda=%d:%d", targetW, targetH)
+	}
+
+	return filter
+}
+
 // getVideoEncoderArgs returns video encoder arguments based on GPU vendor
 func (f *FFmpegWrapper) getVideoEncoderArgs(opts TranscodeOptions) []string {
 	args := []string{}
+
+	// Video Filter (for scaling/upscaling)
+	upscaleFilter := f.getUpscaleFilter(opts)
+	if upscaleFilter != "" {
+		args = append(args, "-vf", upscaleFilter)
+	}
 
 	switch opts.GPUVendor {
 	case GPUVendorNvidia:

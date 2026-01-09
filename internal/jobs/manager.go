@@ -49,6 +49,8 @@ type Job struct {
 	CompletedAt     time.Time `json:"completedAt,omitempty"`
 	Error           string    `json:"error,omitempty"`
 	CreateSubtitles bool      `json:"createSubtitles"` // Premium feature
+	Upscale         bool      `json:"upscale"`         // Premium feature
+	Resolution      string    `json:"resolution"`      // Premium feature
 
 	// Internal
 	ctx    context.Context
@@ -234,6 +236,8 @@ func (m *Manager) runOptimization(job *Job) error {
 		Preset:        media.QualityPreset(m.config.QualityPreset),
 		CRF:           crf,
 		TotalDuration: info.Duration,
+		Upscale:       job.Upscale,
+		Resolution:    job.Resolution,
 	}
 
 	err = m.ffmpeg.TranscodeWithProgress(job.ctx, opts, func(p media.TranscodeProgress) {

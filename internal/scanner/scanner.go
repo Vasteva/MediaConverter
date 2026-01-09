@@ -46,6 +46,8 @@ type ScannerConfig struct {
 	ScanIntervalSec     int              `json:"scanIntervalSec"` // For periodic mode
 	AutoCreateJobs      bool             `json:"autoCreateJobs"`
 	AutoCreateSubtitles bool             `json:"autoCreateSubtitles"`
+	AutoUpscale         bool             `json:"autoUpscale"`
+	AutoResolution      string           `json:"autoResolution"`
 	ProcessedFilePath   string           `json:"processedFilePath"` // Track processed files
 
 	// Job creation settings
@@ -412,6 +414,8 @@ func (s *Scanner) createJobForFile(path string) error {
 		Status:          jobs.StatusPending,
 		Priority:        s.config.DefaultPriority,
 		CreateSubtitles: s.config.AutoCreateSubtitles,
+		Upscale:         s.config.AutoUpscale,
+		Resolution:      s.config.AutoResolution,
 		CreatedAt:       time.Now(),
 	}
 
