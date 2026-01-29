@@ -39,7 +39,7 @@ SCANNER_ENABLED=false
 SCANNER_MODE=manual
 SCANNER_PROCESSED_FILE=/data/processed.json
 MEDIA_ROOT=/mnt/media
-CI_REGISTRY_IMAGE=gitlab.wtzhome.com:5050/vastiva/mediaconverter
+CI_REGISTRY_IMAGE=ghcr.io/vasteva/mediaconverter
 EOF
     echo "⚠️  Please edit $ENV_FILE with your configuration"
     echo "Then run this script again to complete deployment"
@@ -71,7 +71,7 @@ fi
 # Login to GitLab Container Registry if credentials are provided
 if [ -n "$CI_REGISTRY_USER" ] && [ -n "$CI_REGISTRY_PASSWORD" ]; then
     echo "Logging into GitLab Container Registry..."
-    echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin gitlab.wtzhome.com:5050
+    echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin ghcr.io
 fi
 
 # Pull latest image

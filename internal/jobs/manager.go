@@ -10,11 +10,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rwurtz/vastiva/internal/ai"
-	"github.com/rwurtz/vastiva/internal/ai/meta"
-	"github.com/rwurtz/vastiva/internal/ai/whisper"
-	"github.com/rwurtz/vastiva/internal/config"
-	"github.com/rwurtz/vastiva/internal/media"
+	"github.com/Vasteva/MediaConverter/internal/ai"
+	"github.com/Vasteva/MediaConverter/internal/ai/meta"
+	"github.com/Vasteva/MediaConverter/internal/ai/whisper"
+	"github.com/Vasteva/MediaConverter/internal/config"
+	"github.com/Vasteva/MediaConverter/internal/media"
 )
 
 type Status string

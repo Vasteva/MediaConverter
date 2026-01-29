@@ -29,7 +29,7 @@ services:
       - traefik
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.vastiva.rule=Host(`vastiva.wtzhome.com`)"
+      - "traefik.http.routers.vastiva.rule=Host(`media.vasteva.net`)"
       - "traefik.http.routers.vastiva.entrypoints=websecure"
       - "traefik.http.routers.vastiva.tls.certresolver=letsencrypt"
       - "traefik.http.services.vastiva.loadbalancer.server.port=80"

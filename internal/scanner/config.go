@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/rwurtz/vastiva/internal/config"
+	"github.com/Vasteva/MediaConverter/internal/config"
 )
 
 // LoadScannerConfig loads scanner configuration from file and environment

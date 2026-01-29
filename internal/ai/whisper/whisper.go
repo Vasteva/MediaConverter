@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/rwurtz/vastiva/internal/ai"
+	"github.com/Vasteva/MediaConverter/internal/ai"
 )
 
 type Generator struct {

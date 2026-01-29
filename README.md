@@ -32,7 +32,7 @@ A production-ready, AI-enhanced media transcoding platform with intelligent opti
 
 ```bash
 # Clone repository
-git clone https://gitlab.wtzhome.com/vastiva/MediaConverter.git
+git clone https://github.com/Vasteva/MediaConverter.git
 cd MediaConverter
 
 # Create environment file
@@ -232,7 +232,7 @@ curl http://localhost:8091/api/scanner/config | jq
 
 ## 📄 License
 
-Proprietary - Vastiva Pro
+GPL v3
 
 ---
 

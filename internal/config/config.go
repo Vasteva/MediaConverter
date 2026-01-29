@@ -4,8 +4,8 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/rwurtz/vastiva/internal/license"
-	"github.com/rwurtz/vastiva/internal/system"
+	"github.com/Vasteva/MediaConverter/internal/license"
+	"github.com/Vasteva/MediaConverter/internal/system"
 )
 
 type Config struct {

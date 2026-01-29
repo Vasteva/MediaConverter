@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/rwurtz/vastiva/internal/jobs"
+	"github.com/Vasteva/MediaConverter/internal/jobs"
 )
 
 // ScanMode defines how the scanner operates

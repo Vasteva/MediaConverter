@@ -8,14 +8,14 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/rwurtz/vastiva/internal/ai"
-	"github.com/rwurtz/vastiva/internal/ai/search"
-	"github.com/rwurtz/vastiva/internal/config"
-	"github.com/rwurtz/vastiva/internal/jobs"
-	"github.com/rwurtz/vastiva/internal/license"
-	"github.com/rwurtz/vastiva/internal/scanner"
-	"github.com/rwurtz/vastiva/internal/security"
-	"github.com/rwurtz/vastiva/internal/system"
+	"github.com/Vasteva/MediaConverter/internal/ai"
+	"github.com/Vasteva/MediaConverter/internal/ai/search"
+	"github.com/Vasteva/MediaConverter/internal/config"
+	"github.com/Vasteva/MediaConverter/internal/jobs"
+	"github.com/Vasteva/MediaConverter/internal/license"
+	"github.com/Vasteva/MediaConverter/internal/scanner"
+	"github.com/Vasteva/MediaConverter/internal/security"
+	"github.com/Vasteva/MediaConverter/internal/system"
 )
 
 func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *config.Config) {

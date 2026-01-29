@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/rwurtz/vastiva/internal/ai"
+	"github.com/Vasteva/MediaConverter/internal/ai"
 )
 
 // Searcher handles AI-powered natural language search

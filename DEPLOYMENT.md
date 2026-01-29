@@ -18,7 +18,7 @@ In your GitLab project, go to **Settings > CI/CD > Variables** and add:
 |----------|-------------|---------|
 | `CI_REGISTRY_USER` | GitLab username | `your-username` |
 | `CI_REGISTRY_PASSWORD` | GitLab access token | `glpat-xxxxx` |
-| `DEPLOY_HOST` | Production server hostname | `media-server.wtzhome.com` |
+| `DEPLOY_HOST` | Production server hostname | `server.vasteva.net` |
 | `DEPLOY_USER` | SSH user for deployment | `root` |
 | `SSH_PRIVATE_KEY` | SSH private key for server access | `-----BEGIN RSA PRIVATE KEY-----...` |
 
@@ -26,8 +26,8 @@ In your GitLab project, go to **Settings > CI/CD > Variables** and add:
 
 Copy the deployment script to your server:
 ```bash
-scp deploy.sh root@media-server.wtzhome.com:/tmp/
-ssh root@media-server.wtzhome.com
+scp deploy.sh root@server.vasteva.net:/tmp/
+ssh root@server.vasteva.net
 chmod +x /tmp/deploy.sh
 sudo /tmp/deploy.sh
 ```
@@ -67,7 +67,7 @@ SCANNER_MODE=watch
 
 Copy the production docker-compose.yml to your server:
 ```bash
-scp docker-compose.yml root@media-server.wtzhome.com:/opt/vastiva/
+scp docker-compose.yml root@server.vasteva.net:/opt/vastiva/
 ```
 
 ## CI/CD Pipeline
@@ -100,7 +100,7 @@ If you prefer manual deployment:
 cd /opt/vastiva
 
 # Pull latest image
-docker pull gitlab.wtzhome.com:5050/vastiva/mediaconverter:latest
+docker pull ghcr.io/vasteva/mediaconverter:latest
 
 # Restart services
 docker-compose down
@@ -123,12 +123,12 @@ docker network create traefik
 ```yaml
 labels:
   - "traefik.enable=true"
-  - "traefik.http.routers.vastiva.rule=Host(`vastiva.wtzhome.com`)"
+  - "traefik.http.routers.vastiva.rule=Host(`media.vasteva.net`)"
   - "traefik.http.routers.vastiva.entrypoints=websecure"
   - "traefik.http.routers.vastiva.tls.certresolver=letsencrypt"
 ```
 
-3. Access via: `https://vastiva.wtzhome.com`
+3. Access via: `https://media.vasteva.net`
 
 ## Monitoring
 
@@ -200,7 +200,7 @@ To rollback to a previous version:
 
 ```bash
 # Find the SHA of the previous working build
-docker pull gitlab.wtzhome.com:5050/vastiva/mediaconverter:<previous-sha>
+docker pull ghcr.io/vasteva/mediaconverter:<previous-sha>
 
 # Update docker-compose.yml to use specific tag
 # Then restart

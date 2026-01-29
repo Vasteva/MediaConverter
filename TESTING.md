@@ -5,7 +5,7 @@
 ### 1. Build Test
 ```bash
 # Clone the repository
-git clone git@gitlab.wtzhome.com:vastiva/MediaConverter.git
+git clone git@github.com:Vasteva/MediaConverter.git
 cd MediaConverter
 
 # Install dependencies

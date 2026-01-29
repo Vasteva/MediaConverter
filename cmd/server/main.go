@@ -13,12 +13,12 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/joho/godotenv"
 
-	"github.com/rwurtz/vastiva"
-	"github.com/rwurtz/vastiva/internal/ai"
-	"github.com/rwurtz/vastiva/internal/api"
-	"github.com/rwurtz/vastiva/internal/config"
-	"github.com/rwurtz/vastiva/internal/jobs"
-	"github.com/rwurtz/vastiva/internal/scanner"
+	"github.com/Vasteva/MediaConverter"
+	"github.com/Vasteva/MediaConverter/internal/ai"
+	"github.com/Vasteva/MediaConverter/internal/api"
+	"github.com/Vasteva/MediaConverter/internal/config"
+	"github.com/Vasteva/MediaConverter/internal/jobs"
+	"github.com/Vasteva/MediaConverter/internal/scanner"
 )
 
 func main() {
