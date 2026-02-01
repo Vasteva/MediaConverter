@@ -7,13 +7,19 @@ interface ScannerConfigProps {
 }
 
 export default function ScannerConfigComponent({ config: initialConfig, onSave }: ScannerConfigProps) {
-    const [config, setConfig] = useState<ScannerConfig>(initialConfig);
+    // Ensure watchDirectories is always an array to prevent crashes
+    const ensureConfig = (cfg: ScannerConfig) => ({
+        ...cfg,
+        watchDirectories: cfg.watchDirectories || []
+    });
+
+    const [config, setConfig] = useState<ScannerConfig>(ensureConfig(initialConfig));
     const [isSaving, setIsSaving] = useState(false);
     const [newDir, setNewDir] = useState('');
 
     // Update local state if initialConfig changes
     useEffect(() => {
-        setConfig(initialConfig);
+        setConfig(ensureConfig(initialConfig));
     }, [initialConfig]);
 
     const handleSave = async () => {
