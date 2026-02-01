@@ -71,7 +71,7 @@ go run ./cmd/server
 
 ## 📦 Production Deployment
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for comprehensive deployment guide including:
+See [Deployment Guide](docs/getting-started/deployment.md) for comprehensive deployment guide including:
 - GitLab CI/CD pipeline setup
 - Automated builds and deployments
 - Traefik integration for HTTPS
@@ -175,7 +175,7 @@ AI_MODEL=claude-3-opus-20240229
 - **Input Validation**: Strict validation on all user inputs
 - **HTTPS Support**: Traefik integration for automatic SSL certificates
 
-See [SECURITY_AUDIT.md](SECURITY_AUDIT.md) for detailed security analysis.
+See [Security Audit](docs/security/audit.md) for detailed security analysis.
 
 ## 📊 Monitoring
 
@@ -222,10 +222,23 @@ curl http://localhost:8091/api/scanner/config | jq
 
 ## 📚 Documentation
 
-- [Deployment Guide](DEPLOYMENT.md) - Production deployment and CI/CD
-- [Security Audit](SECURITY_AUDIT.md) - Security analysis and hardening
-- [Media Processing](internal/media/README.md) - FFmpeg integration details
-- [File Scanner](internal/scanner/README.md) - Automated discovery system
+All documentation is organized in the [`docs/`](docs/) folder:
+
+- **Getting Started**
+  - [Deployment Guide](docs/getting-started/deployment.md) - Production deployment and CI/CD
+- **Architecture**
+  - [System Overview](docs/architecture/overview.md) - Architecture and data flows
+  - [Backend Implementation](docs/architecture/implementation/backend.md) - FFmpeg wrapper details
+  - [Frontend Implementation](docs/architecture/implementation/frontend.md) - React UI design
+  - [Scanner Implementation](docs/architecture/implementation/scanner.md) - Auto-discovery system
+- **Development**
+  - [Testing Guide](docs/development/testing.md) - Test procedures and checklists
+  - [Task List](docs/development/tasks.md) - Current status and remaining work
+- **Security**
+  - [Security Audit](docs/security/audit.md) - Security analysis and hardening
+- **Package Docs** (inline with code)
+  - [Media Processing](internal/media/README.md) - FFmpeg integration details
+  - [File Scanner](internal/scanner/README.md) - Automated discovery system
 
 ## 🎯 Roadmap
 
