@@ -1,7 +1,11 @@
 import { useState } from 'react';
 import type { ProcessedFile } from '../types';
 
-export default function Search() {
+interface SearchProps {
+    authFetch: (url: string, options?: RequestInit) => Promise<Response>;
+}
+
+export default function Search({ authFetch }: SearchProps) {
     const [query, setQuery] = useState('');
     const [results, setResults] = useState<ProcessedFile[]>([]);
     const [isSearching, setIsSearching] = useState(false);
@@ -15,15 +19,15 @@ export default function Search() {
         setError(null);
 
         try {
-            const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+            const response = await authFetch(`/api/search?q=${encodeURIComponent(query)}`);
             if (!response.ok) {
                 const data = await response.json();
                 throw new Error(data.error || 'Search failed');
             }
             const data = await response.json();
             setResults(data || []);
-        } catch (err: any) {
-            setError(err.message);
+        } catch (err: unknown) {
+            setError(err instanceof Error ? err.message : 'Search failed');
             setResults([]);
         } finally {
             setIsSearching(false);

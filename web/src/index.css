@@ -611,6 +611,38 @@ a:hover {
 }
 
 /* ===========================
+   Premium Effects
+   =========================== */
+
+.glass {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+[data-theme="light"] .glass {
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.title-gradient {
+  background: linear-gradient(135deg, var(--brand-teal), #5fe3db, #3b82f6);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.shadow-strong {
+  box-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.5);
+}
+
+.hover-glow:hover {
+  box-shadow: 0 0 20px rgba(61, 217, 208, 0.3);
+  border-color: var(--brand-teal);
+}
+
+/* ===========================
    Animations
    =========================== */
 

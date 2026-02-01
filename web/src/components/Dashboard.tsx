@@ -37,7 +37,7 @@ export default function Dashboard({ jobs, config, stats, dashboardStats }: Dashb
                             <span className="text-[10px] opacity-70 uppercase tracking-widest font-bold">System Efficiency</span>
                             <span className="text-2xl font-black text-primary">{dashboardStats.efficiencyScore.toFixed(0)}%</span>
                         </div>
-                        <div className="efficiency-ring" style={{ '--percent': dashboardStats.efficiencyScore } as any} />
+                        <div className="efficiency-ring" style={{ '--percent': dashboardStats.efficiencyScore } as React.CSSProperties} />
                     </div>
                 )}
             </div>

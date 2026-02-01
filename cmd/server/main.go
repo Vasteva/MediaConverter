@@ -13,7 +13,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/joho/godotenv"
 
-	"github.com/Vasteva/MediaConverter"
+	vastiva "github.com/Vasteva/MediaConverter"
 	"github.com/Vasteva/MediaConverter/internal/ai"
 	"github.com/Vasteva/MediaConverter/internal/api"
 	"github.com/Vasteva/MediaConverter/internal/config"
@@ -42,11 +42,16 @@ func main() {
 	}
 
 	// Initialize job manager
-	jobManager, err := jobs.NewManager(cfg, aiProvider)
+	jobsFile := os.Getenv("JOBS_FILE")
+	if jobsFile == "" {
+		jobsFile = "./jobs.json"
+	}
+	jobManager, err := jobs.NewManager(cfg, aiProvider, jobsFile)
 	if err != nil {
 		log.Fatalf("Failed to initialize job manager: %v", err)
 	}
 	go jobManager.Start()
+	go jobManager.RequeuePendingJobs() // Requeue any pending jobs from previous session
 
 	// Initialize file scanner
 	watchDirsFile := os.Getenv("SCANNER_CONFIG_FILE")
@@ -77,7 +82,18 @@ func main() {
 
 	// Middleware
 	app.Use(logger.New())
-	app.Use(cors.New())
+
+	// Configure CORS with allowed origins from environment
+	corsOrigins := os.Getenv("CORS_ORIGINS")
+	if corsOrigins == "" {
+		corsOrigins = "http://localhost:5173,http://localhost:3000" // Dev defaults
+	}
+	app.Use(cors.New(cors.Config{
+		AllowOrigins:     corsOrigins,
+		AllowMethods:     "GET,POST,PUT,DELETE,OPTIONS",
+		AllowHeaders:     "Origin,Content-Type,Accept,Authorization",
+		AllowCredentials: true,
+	}))
 
 	// API routes
 	api.RegisterRoutes(app, jobManager, fileScanner, cfg)

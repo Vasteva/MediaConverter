@@ -2,19 +2,21 @@ package scanner
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
 	"github.com/Vasteva/MediaConverter/internal/jobs"
+	"github.com/fsnotify/fsnotify"
 )
 
 // ScanMode defines how the scanner operates
@@ -630,7 +632,13 @@ func randomString(n int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, n)
 	for i := range b {
-		b[i] = letters[time.Now().UnixNano()%int64(len(letters))]
+		idx, err := rand.Int(rand.Reader, big.NewInt(int64(len(letters))))
+		if err != nil {
+			// Fallback to less secure but functional method
+			b[i] = letters[i%len(letters)]
+			continue
+		}
+		b[i] = letters[idx.Int64()]
 	}
 	return string(b)
 }
@@ -699,10 +707,7 @@ func (db *ProcessedDB) GetAll() []ProcessedFile {
 
 // MarkProcessed marks a file as processed and saves the database
 func (db *ProcessedDB) MarkProcessed(f ProcessedFile) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	// Calculate file hash if not provided
+	// Calculate file hash if not provided (before locking)
 	if f.Hash == "" {
 		hash, _ := calculateFileHash(f.Path)
 		f.Hash = hash
@@ -712,7 +717,10 @@ func (db *ProcessedDB) MarkProcessed(f ProcessedFile) {
 		f.ProcessedAt = time.Now()
 	}
 
+	db.mu.Lock()
 	db.processed[f.Path] = f
+	db.mu.Unlock()
+
 	db.Save()
 }
 

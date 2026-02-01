@@ -29,6 +29,7 @@ export interface SystemConfig {
     aiModel?: string;
     licenseKey?: string;
     isPremium?: boolean;
+    isInitialized?: boolean;
     planName?: string;
 }
 export interface WatchDirectory {

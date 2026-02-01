@@ -1,13 +1,15 @@
 package api
 
 import (
+	"crypto/rand"
 	"fmt"
 	"log"
+	"math/big"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
 	"github.com/Vasteva/MediaConverter/internal/ai"
 	"github.com/Vasteva/MediaConverter/internal/ai/search"
 	"github.com/Vasteva/MediaConverter/internal/config"
@@ -16,6 +18,7 @@ import (
 	"github.com/Vasteva/MediaConverter/internal/scanner"
 	"github.com/Vasteva/MediaConverter/internal/security"
 	"github.com/Vasteva/MediaConverter/internal/system"
+	"github.com/gofiber/fiber/v2"
 )
 
 func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *config.Config) {
@@ -23,7 +26,89 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		jm.OnJobComplete = fs.CompleteProcessed
 	}
 
-	api := app.Group("/api")
+	api := app.Group("/api", AuthMiddleware(cfg))
+
+	// Setup Wizard
+	setup := api.Group("/setup")
+	setup.Get("/status", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{
+			"isInitialized": cfg.IsInitialized,
+		})
+	})
+
+	setup.Get("/probes", func(c *fiber.Ctx) error {
+		probes := fiber.Map{
+			"gpu": system.DetectGPU(),
+		}
+
+		// Check for binaries
+		_, err := exec.LookPath("ffmpeg")
+		probes["ffmpeg"] = err == nil
+
+		_, err = exec.LookPath("makemkvcon")
+		probes["makemkv"] = err == nil
+
+		return c.JSON(probes)
+	})
+
+	setup.Post("/complete", func(c *fiber.Ctx) error {
+		var req struct {
+			AdminPassword string `json:"adminPassword"`
+			AIProvider    string `json:"aiProvider"`
+			AIApiKey      string `json:"aiApiKey"`
+			LicenseKey    string `json:"licenseKey"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		if req.AdminPassword != "" {
+			cfg.AdminPassword = req.AdminPassword
+		}
+		if req.AIProvider != "" {
+			cfg.AIProvider = req.AIProvider
+		}
+		if req.AIApiKey != "" {
+			cfg.AIApiKey = req.AIApiKey
+		}
+		if req.LicenseKey != "" {
+			cfg.LicenseKey = req.LicenseKey
+			cfg.IsPremium = license.Validate(req.LicenseKey)
+		}
+
+		if err := cfg.MarkInitialized(); err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		return c.JSON(fiber.Map{"success": true})
+	})
+
+	// Login
+	api.Post("/login", func(c *fiber.Ctx) error {
+		var req struct {
+			Password string `json:"password"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "Invalid request"})
+		}
+
+		// Check if password is configured
+		if cfg.AdminPassword == "" {
+			return c.Status(500).JSON(fiber.Map{"error": "Admin password not configured"})
+		}
+
+		// Validate password
+		if req.Password != cfg.AdminPassword {
+			return c.Status(401).JSON(fiber.Map{"error": "Invalid password"})
+		}
+
+		// Generate and return token
+		token := GenerateToken(cfg.AdminPassword)
+		return c.JSON(fiber.Map{
+			"success": true,
+			"token":   token,
+		})
+	})
 
 	// Dashboard Stats
 	api.Get("/dashboard/stats", func(c *fiber.Ctx) error {
@@ -318,7 +403,13 @@ func randomString(n int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, n)
 	for i := range b {
-		b[i] = letters[time.Now().UnixNano()%int64(len(letters))]
+		idx, err := rand.Int(rand.Reader, big.NewInt(int64(len(letters))))
+		if err != nil {
+			// Fallback to less secure but functional method
+			b[i] = letters[i%len(letters)]
+			continue
+		}
+		b[i] = letters[idx.Int64()]
 	}
 	return string(b)
 }

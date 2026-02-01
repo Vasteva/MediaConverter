@@ -1,0 +1,25 @@
+# Docker Compose override for NVIDIA GPU support
+# Usage: docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up -d
+#
+# Prerequisites:
+# 1. NVIDIA GPU with driver installed on host
+# 2. nvidia-container-toolkit installed: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+# 3. Docker configured to use nvidia runtime
+
+services:
+  vastiva:
+    build:
+      context: .
+      dockerfile: Dockerfile.nvidia
+    image: ${CI_REGISTRY_IMAGE:-vastiva/mediaconverter}:nvidia
+    environment:
+      - GPU_VENDOR=nvidia
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, video]

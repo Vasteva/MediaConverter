@@ -121,7 +121,7 @@
     gap: 1rem;
 }
 
-.theme-toggle {
+.header-btn {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -135,9 +135,14 @@
     transition: all var(--transition-fast);
 }
 
-.theme-toggle:hover {
+.header-btn:hover {
     background: var(--bg-hover);
     transform: scale(1.05);
+}
+
+.logout-btn:hover {
+    color: #ff4e4e;
+    background: rgba(255, 78, 78, 0.1);
 }
 
 .theme-icon {

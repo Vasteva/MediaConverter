@@ -1,8 +1,10 @@
 package media
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -65,6 +67,11 @@ func (m *MakeMKVWrapper) ScanDisc(ctx context.Context, sourcePath string) (*Disc
 
 // Extract extracts titles from a disc or ISO
 func (m *MakeMKVWrapper) Extract(ctx context.Context, opts ExtractOptions) error {
+	return m.ExtractWithProgress(ctx, opts, nil)
+}
+
+// ExtractWithProgress extracts titles from a disc or ISO with real-time progress monitoring
+func (m *MakeMKVWrapper) ExtractWithProgress(ctx context.Context, opts ExtractOptions, callback ProgressCallback) error {
 	// Determine what to extract
 	titleArg := "all"
 	if opts.TitleIndex > 0 {
@@ -72,6 +79,7 @@ func (m *MakeMKVWrapper) Extract(ctx context.Context, opts ExtractOptions) error
 	}
 
 	args := []string{
+		"-r", // Robot mode for parsable output
 		"mkv",
 		fmt.Sprintf("file:%s", opts.SourcePath),
 		titleArg,
@@ -85,13 +93,62 @@ func (m *MakeMKVWrapper) Extract(ctx context.Context, opts ExtractOptions) error
 
 	cmd := exec.CommandContext(ctx, m.makemkvconPath, args...)
 
-	// Capture output for progress tracking
-	output, err := cmd.CombinedOutput()
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return fmt.Errorf("makemkvcon extraction failed: %w\nOutput: %s", err, string(output))
+		return fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+
+	// Start the command
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start makemkvcon: %w", err)
+	}
+
+	// Parse progress in a goroutine
+	if callback != nil {
+		go m.parseExtractProgress(stdout, callback)
+	} else {
+		// If no callback, we still need to consume stdout
+		go func() {
+			buf := make([]byte, 1024)
+			for {
+				if _, err := stdout.Read(buf); err != nil {
+					break
+				}
+			}
+		}()
+	}
+
+	// Wait for completion
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("makemkvcon extraction failed: %w", err)
 	}
 
 	return nil
+}
+
+// parseExtractProgress parses MakeMKV robot mode output for progress
+func (m *MakeMKVWrapper) parseExtractProgress(reader io.Reader, callback ProgressCallback) {
+	scanner := bufio.NewScanner(reader)
+	progress := TranscodeProgress{}
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// PRGV:current,total,max
+		if strings.HasPrefix(line, "PRGV:") {
+			parts := strings.Split(strings.TrimPrefix(line, "PRGV:"), ",")
+			if len(parts) >= 3 {
+				total, _ := strconv.ParseFloat(parts[1], 64)
+				max, _ := strconv.ParseFloat(parts[2], 64)
+				if max > 0 {
+					progress.Percentage = int((total / max) * 100)
+					if callback != nil {
+						callback(progress)
+					}
+				}
+			}
+		}
+	}
 }
 
 // parseDiscInfo parses MakeMKV output to extract disc information

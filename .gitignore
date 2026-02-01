@@ -30,6 +30,8 @@ logs/
 # Data
 /data/
 processed.json
+scanner-config.json
+jobs.json
 
 # Build artifacts
 /web/dist/

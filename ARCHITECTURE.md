@@ -5,7 +5,7 @@
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         Web UI (React)                          │
-│                     (Frontend - WIP)                            │
+│               Dashboard, Jobs, Scanner, Settings                │
 └────────────────────────────┬────────────────────────────────────┘
                              │ HTTP/REST
                              ▼
@@ -19,9 +19,12 @@
 │                      API Routes Layer                           │
 │                   (internal/api/routes.go)                      │
 │                                                                 │
-│  • GET  /api/health      • GET    /api/jobs                    │
-│  • POST /api/jobs        • GET    /api/jobs/:id                │
-│  • DELETE /api/jobs/:id  • GET    /api/config                  │
+│  • GET  /api/health         • POST /api/login                  │
+│  • GET  /api/jobs           • POST /api/jobs                   │
+│  • GET  /api/config         • POST /api/config                 │
+│  • GET  /api/scanner/config • POST /api/scanner/config         │
+│  • GET  /api/search         • GET  /api/dashboard/stats        │
+│  • GET  /api/setup/status   • POST /api/setup/complete         │
 └────────────────────────────┬────────────────────────────────────┘
                              │
                              ▼
@@ -197,6 +200,42 @@ GPU_VENDOR environment variable
                       ├─ No hardware accel
                       ├─ -preset fast/medium/slow
                       └─ -crf [CRF]
+```
+
+## AI Integration (Premium Features)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      AI Provider Interface                       │
+│                    (internal/ai/provider.go)                     │
+│                                                                  │
+│  Provider.Analyze(prompt) → string                              │
+│  Provider.Transcribe(audioPath) → SRT text                      │
+│  Provider.GetName() → string                                    │
+└────────────────────────────┬─────────────────────────────────────┘
+                             │
+         ┌───────────────────┼───────────────────┐
+         ▼                   ▼                   ▼
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│   OpenAI    │    │   Gemini    │    │   Ollama    │
+│ (GPT-4, etc)│    │   (Google)  │    │   (Local)   │
+├─────────────┤    ├─────────────┤    ├─────────────┤
+│ ✓ Analyze   │    │ ✓ Analyze   │    │ ✓ Analyze   │
+│ ✓ Transcribe│    │ ✗ Transcribe│    │ ✗ Transcribe│
+└─────────────┘    └─────────────┘    └─────────────┘
+
+AI Features (Premium):
+├─ Metadata Cleaning  → internal/ai/meta/cleaner.go
+│  └─ Cleans messy filenames: "Movie.2024.1080p.BluRay" → "Movie (2024)"
+│
+├─ Adaptive Encoding  → internal/ai/meta/cleaner.go
+│  └─ AI suggests optimal CRF based on content analysis
+│
+├─ Whisper Subtitles  → internal/ai/whisper/generator.go
+│  └─ Generates SRT files from audio using OpenAI Whisper
+│
+└─ Natural Language Search → internal/ai/search/searcher.go
+   └─ Find media with queries like "action movies in space"
 ```
 
 ## Concurrency Model

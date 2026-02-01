@@ -2,7 +2,9 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/Vasteva/MediaConverter/internal/license"
 	"github.com/Vasteva/MediaConverter/internal/system"
@@ -41,8 +43,9 @@ type Config struct {
 	ScannerAutoCreate    bool
 	ScannerProcessedFile string
 
-	// License State
-	IsPremium bool
+	// State
+	IsPremium     bool
+	IsInitialized bool
 }
 
 func Load() *Config {
@@ -73,7 +76,26 @@ func Load() *Config {
 		ScannerIntervalSec:   getEnvInt("SCANNER_INTERVAL_SEC", 300),
 		ScannerAutoCreate:    getEnvBool("SCANNER_AUTO_CREATE", true),
 		ScannerProcessedFile: getEnv("SCANNER_PROCESSED_FILE", "/data/processed.json"),
+		IsInitialized:        checkInitialized(getEnv("SCANNER_PROCESSED_FILE", "/data/processed.json")),
 	}
+}
+
+func checkInitialized(processedFile string) bool {
+	dir := filepath.Dir(processedFile)
+	initFile := filepath.Join(dir, ".initialized")
+	_, err := os.Stat(initFile)
+	return err == nil
+}
+
+// MarkInitialized creates the .initialized file
+func (c *Config) MarkInitialized() error {
+	dir := filepath.Dir(c.ScannerProcessedFile)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	initFile := filepath.Join(dir, ".initialized")
+	c.IsInitialized = true
+	return os.WriteFile(initFile, []byte(time.Now().Format(time.RFC3339)), 0644)
 }
 
 func getEnv(key, fallback string) string {

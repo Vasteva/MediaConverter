@@ -1,0 +1,58 @@
+# --- Frontend Build Stage ---
+FROM node:20-alpine AS frontend-builder
+WORKDIR /app/web
+COPY web/package*.json ./
+RUN npm install
+COPY web/ .
+RUN npm run build
+
+# --- Go Build Stage ---
+FROM golang:1.22-alpine AS go-builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+# Copy built frontend from frontend-builder
+COPY --from=frontend-builder /app/web/dist ./web/dist
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o vastiva ./cmd/server
+
+# --- Runtime Stage (NVIDIA CUDA) ---
+# Uses NVIDIA CUDA runtime image for GPU acceleration
+# Requires: Docker with nvidia-container-toolkit and --gpus all flag
+FROM nvidia/cuda:12.3.1-runtime-ubuntu22.04
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install FFmpeg with NVIDIA codec support and other dependencies
+RUN apt-get update && apt-get install -y \
+    software-properties-common \
+    && add-apt-repository ppa:savoury1/ffmpeg4 \
+    && add-apt-repository ppa:savoury1/ffmpeg5 \
+    && apt-get update && apt-get install -y \
+    ffmpeg \
+    libnpp-dev-12-3 \
+    libnvidia-encode-535 \
+    libnvidia-decode-535 \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy single binary from go-builder
+COPY --from=go-builder /app/vastiva /app/vastiva
+
+# Set environment
+ENV PORT=80
+ENV SOURCE_DIR=/storage
+ENV DEST_DIR=/output
+ENV SCANNER_PROCESSED_FILE=/data/processed.json
+ENV GPU_VENDOR=nvidia
+
+# Expose port
+EXPOSE 80
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:80/api/health || exit 1
+
+CMD ["/app/vastiva"]

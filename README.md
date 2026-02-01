@@ -46,6 +46,18 @@ docker-compose up -d
 open http://localhost:8091
 ```
 
+### NVIDIA GPU Support
+
+For NVIDIA GPU acceleration (NVENC encoding):
+
+```bash
+# Prerequisites: nvidia-container-toolkit installed
+# See: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+
+# Deploy with NVIDIA GPU support
+docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up -d
+```
+
 ### Development Setup
 
 ```bash
@@ -93,8 +105,10 @@ vastiva/
 │   ├── security/        # Path validation & masking
 │   └── system/          # System monitoring
 ├── web/                 # React frontend
-├── Dockerfile           # Multi-stage build
+├── Dockerfile           # Multi-stage build (CPU/Intel/AMD)
+├── Dockerfile.nvidia    # NVIDIA CUDA build
 ├── docker-compose.yml   # Production orchestration
+├── docker-compose.nvidia.yml  # NVIDIA GPU override
 └── .gitlab-ci.yml       # CI/CD pipeline
 ```
 

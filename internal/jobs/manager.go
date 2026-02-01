@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -75,9 +76,10 @@ type Manager struct {
 	makemkv       *media.MakeMKVWrapper
 	ai            ai.Provider
 	OnJobComplete func(*Job)
+	jobsFilePath  string
 }
 
-func NewManager(cfg *config.Config, aiProvider ai.Provider) (*Manager, error) {
+func NewManager(cfg *config.Config, aiProvider ai.Provider, jobsFilePath string) (*Manager, error) {
 	ffmpeg, err := media.NewFFmpegWrapper()
 	if err != nil {
 		log.Printf("Warning: FFmpeg not available: %v", err)
@@ -88,7 +90,7 @@ func NewManager(cfg *config.Config, aiProvider ai.Provider) (*Manager, error) {
 		log.Printf("Warning: MakeMKV not available: %v", err)
 	}
 
-	return &Manager{
+	m := &Manager{
 		jobs:          make(map[string]*Job),
 		queue:         make(chan *Job, 1000),
 		maxConcurrent: cfg.MaxConcurrentJobs,
@@ -97,7 +99,15 @@ func NewManager(cfg *config.Config, aiProvider ai.Provider) (*Manager, error) {
 		ffmpeg:        ffmpeg,
 		makemkv:       makemkv,
 		ai:            aiProvider,
-	}, nil
+		jobsFilePath:  jobsFilePath,
+	}
+
+	// Load existing jobs from disk
+	if err := m.Load(); err != nil && !os.IsNotExist(err) {
+		log.Printf("Warning: Could not load existing jobs: %v", err)
+	}
+
+	return m, nil
 }
 
 func (m *Manager) Start() {
@@ -135,6 +145,7 @@ func (m *Manager) AddJob(job *Job) {
 	m.mu.Lock()
 	m.jobs[job.ID] = job
 	m.mu.Unlock()
+	m.Save() // Persist to disk
 	m.queue <- job
 }
 
@@ -220,6 +231,9 @@ func (m *Manager) processJob(job *Job) {
 	}
 	job.CompletedAt = time.Now()
 
+	// Persist job state to disk
+	m.Save()
+
 	if m.OnJobComplete != nil {
 		m.OnJobComplete(job)
 	}
@@ -229,7 +243,43 @@ func (m *Manager) runExtraction(job *Job) error {
 	if m.makemkv == nil {
 		return fmt.Errorf("makemkv wrapper not initialized")
 	}
-	// TODO: Full extraction logic
+
+	log.Printf("[Job %s] Starting disc extraction for %s", job.ID, job.SourcePath)
+
+	// 1. Scan disc to find titles
+	info, err := m.makemkv.ScanDisc(job.ctx, job.SourcePath)
+	if err != nil {
+		return fmt.Errorf("failed to scan disc: %v", err)
+	}
+
+	if len(info.Titles) == 0 {
+		return fmt.Errorf("no titles found on disc")
+	}
+
+	// 2. Find the main feature (largest title)
+	mainTitleIdx := info.FindLargestTitle()
+	log.Printf("[Job %s] Detected main feature: Title %d", job.ID, mainTitleIdx)
+
+	// 3. Ensure destination directory exists
+	if err := os.MkdirAll(job.DestinationPath, 0755); err != nil {
+		return fmt.Errorf("failed to create destination directory: %v", err)
+	}
+
+	// 4. Run extraction
+	opts := media.ExtractOptions{
+		SourcePath: job.SourcePath,
+		OutputDir:  job.DestinationPath,
+		TitleIndex: mainTitleIdx,
+	}
+
+	err = m.makemkv.ExtractWithProgress(job.ctx, opts, func(p media.TranscodeProgress) {
+		job.Progress = p.Percentage
+	})
+	if err != nil {
+		return fmt.Errorf("extraction failed: %v", err)
+	}
+
+	log.Printf("[Job %s] Extraction complete", job.ID)
 	return nil
 }
 
@@ -318,4 +368,82 @@ func formatDuration(d time.Duration) string {
 	d -= m * time.Minute
 	s := d / time.Second
 	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
+}
+
+// Save persists all jobs to disk
+func (m *Manager) Save() error {
+	if m.jobsFilePath == "" {
+		return nil // No persistence configured
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// Create a slice of jobs for serialization
+	jobList := make([]*Job, 0, len(m.jobs))
+	for _, job := range m.jobs {
+		jobList = append(jobList, job)
+	}
+
+	data, err := json.MarshalIndent(jobList, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal jobs: %w", err)
+	}
+
+	if err := os.WriteFile(m.jobsFilePath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write jobs file: %w", err)
+	}
+
+	return nil
+}
+
+// Load reads persisted jobs from disk
+func (m *Manager) Load() error {
+	if m.jobsFilePath == "" {
+		return nil // No persistence configured
+	}
+
+	data, err := os.ReadFile(m.jobsFilePath)
+	if err != nil {
+		return err
+	}
+
+	var jobList []*Job
+	if err := json.Unmarshal(data, &jobList); err != nil {
+		return fmt.Errorf("failed to unmarshal jobs: %w", err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	pendingJobs := 0
+	for _, job := range jobList {
+		// Reset processing jobs to pending (interrupted by restart)
+		if job.Status == StatusProcessing {
+			job.Status = StatusPending
+			pendingJobs++
+		}
+		m.jobs[job.ID] = job
+	}
+
+	log.Printf("Loaded %d jobs from disk (%d pending)", len(jobList), pendingJobs)
+	return nil
+}
+
+// RequeuePendingJobs adds all pending jobs back to the queue (call after Start())
+func (m *Manager) RequeuePendingJobs() {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	count := 0
+	for _, job := range m.jobs {
+		if job.Status == StatusPending {
+			m.queue <- job
+			count++
+		}
+	}
+
+	if count > 0 {
+		log.Printf("Requeued %d pending jobs", count)
+	}
 }

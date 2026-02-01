@@ -6,9 +6,10 @@ interface HeaderProps {
     currentView: string;
     onViewChange: (view: 'dashboard' | 'jobs' | 'scanner' | 'search' | 'settings') => void;
     isPremium?: boolean;
+    onLogout?: () => void;
 }
 
-export default function Header({ theme, onToggleTheme, currentView, onViewChange, isPremium }: HeaderProps) {
+export default function Header({ theme, onToggleTheme, currentView, onViewChange, isPremium, onLogout }: HeaderProps) {
     return (
         <header className="header">
             <div className="header-container">
@@ -96,7 +97,7 @@ export default function Header({ theme, onToggleTheme, currentView, onViewChange
                 </nav>
 
                 <div className="header-right">
-                    <button className="theme-toggle" onClick={onToggleTheme} title="Toggle theme">
+                    <button className="header-btn theme-toggle" onClick={onToggleTheme} title="Toggle theme">
                         {theme === 'light' ? (
                             <svg className="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                                 <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -108,6 +109,13 @@ export default function Header({ theme, onToggleTheme, currentView, onViewChange
                             </svg>
                         )}
                     </button>
+                    {onLogout && (
+                        <button className="header-btn logout-btn" onClick={onLogout} title="Logout">
+                            <svg className="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <path d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                        </button>
+                    )}
                 </div>
             </div>
         </header>

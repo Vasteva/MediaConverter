@@ -77,7 +77,7 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
                             <select
                                 className="input select"
                                 value={config.mode}
-                                onChange={e => setConfig({ ...config, mode: e.target.value as any })}
+                                onChange={e => setConfig({ ...config, mode: e.target.value as ScannerConfig['mode'] })}
                             >
                                 <option value="manual">Manual (Trigger API only)</option>
                                 <option value="startup">Startup Only</option>
