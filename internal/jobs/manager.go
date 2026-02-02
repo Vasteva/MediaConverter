@@ -288,11 +288,16 @@ func (m *Manager) runOptimization(job *Job) error {
 		return fmt.Errorf("ffmpeg wrapper not initialized")
 	}
 
+	log.Printf("[Job %s] Starting optimization: %s", job.ID, job.SourcePath)
+
 	// 1. Get media info for duration
 	info, err := m.ffmpeg.GetMediaInfo(job.ctx, job.SourcePath)
 	if err != nil {
-		log.Printf("Warning: Could not get media info: %v", err)
+		log.Printf("[Job %s] Error getting media info: %v", job.ID, err)
+		return fmt.Errorf("failed to get media info: %w", err)
 	}
+
+	log.Printf("[Job %s] Media duration: %.2f seconds", job.ID, info.Duration)
 
 	// 2. Premium Feature: AI Adaptive Encoding
 	crf := m.config.CRF
@@ -316,14 +321,19 @@ func (m *Manager) runOptimization(job *Job) error {
 		Resolution:    job.Resolution,
 	}
 
+	log.Printf("[Job %s] Starting ffmpeg transcoding to: %s", job.ID, opts.OutputPath)
+
 	err = m.ffmpeg.TranscodeWithProgress(job.ctx, opts, func(p media.TranscodeProgress) {
 		job.Progress = p.Percentage
 		job.FPS = p.FPS
 		job.ETA = p.ETA
 	})
 	if err != nil {
+		log.Printf("[Job %s] FFmpeg failed: %v", job.ID, err)
 		return err
 	}
+
+	log.Printf("[Job %s] Transcoding completed successfully", job.ID)
 
 	// 3. Premium Feature: AI Whisper Subtitles
 	if m.config.IsPremium && job.CreateSubtitles && m.ai != nil {

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import FileBrowserModal from './FileBrowserModal';
 import type { Job } from '../types';
 
 interface JobListProps {
@@ -21,6 +22,13 @@ export default function JobList({ jobs, onCreateJob, onCancelJob }: JobListProps
     const [upscale, setUpscale] = useState(false);
     const [resolution, setResolution] = useState('1080p');
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [showFileBrowser, setShowFileBrowser] = useState(false);
+    const [activeBrowserField, setActiveBrowserField] = useState<'source' | 'dest' | null>(null);
+
+    const openBrowser = (field: 'source' | 'dest') => {
+        setActiveBrowserField(field);
+        setShowFileBrowser(true);
+    };
 
     const filteredJobs = jobs.filter(job => {
         if (filter === 'all') return true;
@@ -148,9 +156,16 @@ export default function JobList({ jobs, onCreateJob, onCancelJob }: JobListProps
                                             </div>
                                         </td>
                                         <td>
-                                            <span className={`badge badge-${job.status}`}>
-                                                {job.status}
-                                            </span>
+                                            <div className="flex flex-col gap-1">
+                                                <span className={`badge badge-${job.status}`} title={job.error || ''}>
+                                                    {job.status}
+                                                </span>
+                                                {job.status === 'failed' && job.error && (
+                                                    <span className="text-xs text-danger" style={{ maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={job.error}>
+                                                        {job.error}
+                                                    </span>
+                                                )}
+                                            </div>
                                         </td>
                                         <td>
                                             <div style={{ minWidth: '150px' }}>
@@ -222,14 +237,23 @@ export default function JobList({ jobs, onCreateJob, onCancelJob }: JobListProps
 
                                 <div className="form-group mb-4">
                                     <label className="label mb-2 block">Source Path</label>
-                                    <input
-                                        type="text"
-                                        className="input"
-                                        value={sourcePath}
-                                        onChange={e => setSourcePath(e.target.value)}
-                                        placeholder="/path/to/source/file.mkv"
-                                        required
-                                    />
+                                    <div className="flex gap-2">
+                                        <input
+                                            type="text"
+                                            className="input"
+                                            value={sourcePath}
+                                            onChange={e => setSourcePath(e.target.value)}
+                                            placeholder="/path/to/source/file.mkv"
+                                            required
+                                        />
+                                        <button
+                                            type="button"
+                                            className="btn btn-secondary"
+                                            onClick={() => openBrowser('source')}
+                                        >
+                                            Browse
+                                        </button>
+                                    </div>
                                     <p className="text-xs text-secondary mt-1">
                                         Absolute path to the source file on the server.
                                     </p>
@@ -237,13 +261,22 @@ export default function JobList({ jobs, onCreateJob, onCancelJob }: JobListProps
 
                                 <div className="form-group mb-4">
                                     <label className="label mb-2 block">Destination Path (Optional)</label>
-                                    <input
-                                        type="text"
-                                        className="input"
-                                        value={destPath}
-                                        onChange={e => setDestPath(e.target.value)}
-                                        placeholder="/path/to/output/file.mkv"
-                                    />
+                                    <div className="flex gap-2">
+                                        <input
+                                            type="text"
+                                            className="input"
+                                            value={destPath}
+                                            onChange={e => setDestPath(e.target.value)}
+                                            placeholder="/path/to/output/file.mkv"
+                                        />
+                                        <button
+                                            type="button"
+                                            className="btn btn-secondary"
+                                            onClick={() => openBrowser('dest')}
+                                        >
+                                            Browse
+                                        </button>
+                                    </div>
                                     <p className="text-xs text-secondary mt-1">
                                         Leave empty to auto-generate based on source.
                                     </p>
@@ -318,6 +351,24 @@ export default function JobList({ jobs, onCreateJob, onCancelJob }: JobListProps
                         </form>
                     </div>
                 </div>
+            )}
+
+            {showFileBrowser && (
+                <FileBrowserModal
+                    isOpen={showFileBrowser}
+                    onClose={() => {
+                        setShowFileBrowser(false);
+                        setActiveBrowserField(null);
+                    }}
+                    onSelect={(path) => {
+                        if (activeBrowserField === 'source') setSourcePath(path);
+                        if (activeBrowserField === 'dest') setDestPath(path);
+                    }}
+                    selectMode={activeBrowserField === 'source' ? 'file' : 'both'}
+                    title={activeBrowserField === 'source' ? "Select Source File" : "Select Destination"}
+                    initialPath={activeBrowserField === 'source' ? (sourcePath || '/') : (destPath || '/')}
+                    zIndex={1100}
+                />
             )}
         </div>
     );

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -27,6 +28,7 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 	}
 
 	api := app.Group("/api", AuthMiddleware(cfg))
+	RegisterFSRoutes(api)
 
 	// Setup Wizard
 	setup := api.Group("/setup")
@@ -74,6 +76,11 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		if req.LicenseKey != "" {
 			cfg.LicenseKey = req.LicenseKey
 			cfg.IsPremium = license.Validate(req.LicenseKey)
+		}
+
+		if err := cfg.Save(); err != nil {
+			log.Printf("Failed to save config: %v", err)
+			// Don't fail the request, but log it
 		}
 
 		if err := cfg.MarkInitialized(); err != nil {
@@ -184,14 +191,18 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 
 		destPath := req.DestPath
 		if destPath != "" {
-			var dErr error
-			destPath, dErr = security.ValidatePath(req.DestPath, cfg.DestDir)
-			if dErr != nil {
-				return c.Status(403).JSON(fiber.Map{"error": dErr.Error()})
+			// If destination is specified, clean it
+			destPath = filepath.Clean(destPath)
+			// Check if it's a directory - if so, use source filename
+			if info, err := os.Stat(destPath); err == nil && info.IsDir() {
+				destPath = filepath.Join(destPath, filepath.Base(sourcePath))
 			}
 		} else {
-			// Default destination in DestDir
-			destPath = filepath.Join(cfg.DestDir, filepath.Base(sourcePath))
+			// Default: same directory as source with _optimized suffix
+			sourceDir := filepath.Dir(sourcePath)
+			sourceExt := filepath.Ext(sourcePath)
+			sourceBase := strings.TrimSuffix(filepath.Base(sourcePath), sourceExt)
+			destPath = filepath.Join(sourceDir, sourceBase+"_optimized"+sourceExt)
 		}
 
 		job := &jobs.Job{
@@ -298,6 +309,11 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		}
 
 		log.Printf("Configuration updated: AI Provider=%s, Premium=%v", cfg.AIProvider, cfg.IsPremium)
+
+		if err := cfg.Save(); err != nil {
+			log.Printf("Failed to save config: %v", err)
+		}
+
 		return c.JSON(fiber.Map{"success": true})
 	})
 

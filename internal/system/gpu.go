@@ -2,6 +2,7 @@ package system
 
 import (
 	"log"
+	"os"
 	"os/exec"
 )
 
@@ -22,8 +23,19 @@ func DetectGPU() string {
 	_, err = exec.LookPath("vainfo")
 	if err == nil {
 		out, _ := exec.Command("vainfo").Output()
-		if contains(string(out), "Intel") || contains(string(out), "i915") {
+		if contains(string(out), "Intel") || contains(string(out), "i915") || contains(string(out), "iHD") {
 			log.Println("[System] Auto-detected Intel GPU via VAAPI")
+			return "intel"
+		}
+	}
+
+	// Fallback: Check for /dev/dri/renderD128 which indicates Intel/AMD GPU
+	// Also check if ffmpeg reports QSV support
+	if fileExists("/dev/dri/renderD128") {
+		// Try to detect via ffmpeg encoders
+		out, _ := exec.Command("ffmpeg", "-hide_banner", "-encoders").Output()
+		if contains(string(out), "hevc_qsv") {
+			log.Println("[System] Auto-detected Intel GPU via QSV encoder availability")
 			return "intel"
 		}
 	}
@@ -60,4 +72,9 @@ func stringContains(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }

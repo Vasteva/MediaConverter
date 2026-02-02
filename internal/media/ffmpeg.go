@@ -111,7 +111,8 @@ func (f *FFmpegWrapper) getHWAccelInputArgs(vendor GPUVendor) []string {
 	case GPUVendorNvidia:
 		return []string{"-hwaccel", "cuda", "-hwaccel_output_format", "cuda"}
 	case GPUVendorIntel:
-		return []string{"-hwaccel", "qsv", "-hwaccel_output_format", "qsv"}
+		// Use VAAPI for Intel on Linux/Docker as it's more reliable than QSV in containers
+		return []string{"-hwaccel", "vaapi", "-hwaccel_device", "/dev/dri/renderD128", "-hwaccel_output_format", "vaapi"}
 	case GPUVendorAMD:
 		return []string{"-hwaccel", "vaapi", "-hwaccel_device", "/dev/dri/renderD128", "-hwaccel_output_format", "vaapi"}
 	default:
@@ -164,16 +165,15 @@ func (f *FFmpegWrapper) getVideoEncoderArgs(opts TranscodeOptions) []string {
 		)
 	case GPUVendorIntel:
 		args = append(args,
-			"-c:v", "hevc_qsv",
-			"-preset", string(opts.Preset),
-			"-global_quality", fmt.Sprintf("%d", opts.CRF),
-			"-look_ahead", "1",
+			"-c:v", "hevc_vaapi",
+			"-qp", fmt.Sprintf("%d", opts.CRF),
+			"-vf", "hwupload",
 		)
 	case GPUVendorAMD:
 		args = append(args,
 			"-c:v", "hevc_vaapi",
 			"-qp", fmt.Sprintf("%d", opts.CRF),
-			"-vf", "format=nv12,hwupload",
+			"-vf", "hwupload",
 		)
 	default: // CPU
 		args = append(args,

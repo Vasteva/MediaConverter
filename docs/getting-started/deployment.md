@@ -1,23 +1,21 @@
 # Vastiva Media Converter - Deployment Guide
 
 ## Overview
-This guide covers deploying Vastiva Media Converter to your production server using GitLab CI/CD and Docker.
+This guide covers deploying Vastiva Media Converter to your production server using GitHub Actions and Docker.
 
 ## Prerequisites
-- GitLab repository with Container Registry enabled
+- GitHub repository with GitHub Packages enabled
 - Production server with Docker installed
 - SSH access to production server
 - Domain name configured (optional, for HTTPS via Traefik)
 
 ## Initial Setup
 
-### 1. Configure GitLab CI/CD Variables
-In your GitLab project, go to **Settings > CI/CD > Variables** and add:
+### 1. Configure GitHub Secrets
+In your GitHub repository, go to **Settings > Secrets and variables > Actions** and add:
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `CI_REGISTRY_USER` | GitLab username | `your-username` |
-| `CI_REGISTRY_PASSWORD` | GitLab access token | `glpat-xxxxx` |
+| Secret | Description | Example |
+|--------|-------------|---------|
 | `DEPLOY_HOST` | Production server hostname | `server.vasteva.net` |
 | `DEPLOY_USER` | SSH user for deployment | `root` |
 | `SSH_PRIVATE_KEY` | SSH private key for server access | `-----BEGIN RSA PRIVATE KEY-----...` |
@@ -71,25 +69,18 @@ scp docker-compose.yml root@server.vasteva.net:/opt/vastiva/
 ```
 
 ## CI/CD Pipeline
+### Automatic Build & Deploy
+Every push to `main` branch triggers the GitHub Action workflow:
 
-### Automatic Build
-Every push to `main` branch triggers:
-1. **Build Stage**: Creates Docker image with embedded frontend
-2. **Push to Registry**: Uploads to GitLab Container Registry
-3. **Tag**: Creates both SHA-tagged and `latest` versions
+1. **Build Stage**: Creates Docker image
+2. **Push to Registry**: Uploads to GitHub Container Registry (ghcr.io)
+3. **Deploy**:
+   - SSH into your production server
+   - Pull the latest image
+   - Restart the application
+   - Clean up old images
 
-### Manual Deployment
-After a successful build:
-1. Go to **CI/CD > Pipelines** in GitLab
-2. Click the play button (▶️) on the `deploy` job
-3. Confirm deployment
-
-The pipeline will:
-- SSH into your production server
-- Pull the latest image from Container Registry
-- Stop the old container
-- Start the new container
-- Clean up old images
+You can monitor the progress in the **Actions** tab of your repository.
 
 ## Manual Deployment
 

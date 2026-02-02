@@ -72,7 +72,7 @@ go run ./cmd/server
 ## 📦 Production Deployment
 
 See [Deployment Guide](docs/getting-started/deployment.md) for comprehensive deployment guide including:
-- GitLab CI/CD pipeline setup
+- GitHub Actions CI/CD pipeline setup
 - Automated builds and deployments
 - Traefik integration for HTTPS
 - Backup and monitoring procedures
@@ -109,7 +109,7 @@ vastiva/
 ├── Dockerfile.nvidia    # NVIDIA CUDA build
 ├── docker-compose.yml   # Production orchestration
 ├── docker-compose.nvidia.yml  # NVIDIA GPU override
-└── .gitlab-ci.yml       # CI/CD pipeline
+└── .github/workflows/   # CI/CD pipeline
 ```
 
 ## 🔧 Configuration

@@ -17,13 +17,14 @@ COPY --from=frontend-builder /app/web/dist ./web/dist
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o vastiva ./cmd/server
 
 # --- Runtime Stage ---
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install FFmpeg and hardware drivers
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     libva-drm2 libva2 vainfo \
+    intel-gpu-tools \
     mesa-va-drivers \
     intel-media-va-driver-non-free \
     i965-va-driver-shaders \

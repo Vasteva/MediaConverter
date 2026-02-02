@@ -2,11 +2,14 @@ package system
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Stats struct {
@@ -106,7 +109,7 @@ func getDiskUsage(path string) (float64, float64) {
 }
 
 func getGPUStats() (float64, float64) {
-	// Try nvidia-smi
+	// 1. Try nvidia-smi
 	out, err := exec.Command("nvidia-smi", "--query-gpu=utilization.gpu,temperature.gpu", "--format=csv,noheader,nounits").Output()
 	if err == nil {
 		fields := strings.Split(strings.TrimSpace(string(out)), ",")
@@ -116,5 +119,38 @@ func getGPUStats() (float64, float64) {
 			return usage, temp
 		}
 	}
+
+	// 2. Try intel_gpu_top for Intel GPUs (Arc/iGPU)
+	// Requires root/cap_sys_admin and intel-gpu-tools installed
+	// We run it for a short burst to sample usage
+	// timeout 0.5s intel_gpu_top -J -s 500 -o -
+	ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "intel_gpu_top", "-J", "-s", "500", "-o", "-")
+	out, err = cmd.Output()
+	// Ignore error as timeout kills the process which causes an error code, but we might get output
+	if len(out) > 0 {
+		// Parse max "busy": val from JSON output using regex to avoid complex struct
+		// JSON format: "engines": { "Render/3D/0": { "busy": 10.0 ... } }
+		// pattern matches all "busy": followed by number
+		re := regexp.MustCompile(`"busy":\s*([\d\.]+)`)
+		matches := re.FindAllStringSubmatch(string(out), -1)
+
+		var maxBusy float64 = 0
+		for _, match := range matches {
+			if len(match) > 1 {
+				val, _ := strconv.ParseFloat(match[1], 64)
+				if val > maxBusy {
+					maxBusy = val
+				}
+			}
+		}
+
+		// For temp, checking sysfs is standard for some but not consistent via intel_gpu_top JSON
+		// Let's return 0 temp for now or try to match "actual": freq? No temp in JSON usually.
+		return maxBusy, 0
+	}
+
 	return 0, 0
 }

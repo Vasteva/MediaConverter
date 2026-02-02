@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import FileBrowserModal from './FileBrowserModal';
 import type { ScannerConfig, WatchDirectory } from '../types';
 
 interface ScannerConfigProps {
@@ -16,6 +17,7 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
     const [config, setConfig] = useState<ScannerConfig>(ensureConfig(initialConfig));
     const [isSaving, setIsSaving] = useState(false);
     const [newDir, setNewDir] = useState('');
+    const [showFileBrowser, setShowFileBrowser] = useState(false);
 
     // Update local state if initialConfig changes
     useEffect(() => {
@@ -193,8 +195,26 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
                                 placeholder="/path/to/watch"
                                 onKeyDown={e => e.key === 'Enter' && addWatchDir()}
                             />
+                            <button
+                                className="btn btn-secondary"
+                                onClick={() => setShowFileBrowser(true)}
+                                type="button"
+                            >
+                                Browse
+                            </button>
                             <button className="btn btn-secondary" onClick={addWatchDir} disabled={!newDir}>Add</button>
                         </div>
+
+                        {showFileBrowser && (
+                            <FileBrowserModal
+                                isOpen={showFileBrowser}
+                                onClose={() => setShowFileBrowser(false)}
+                                onSelect={(path) => setNewDir(path)}
+                                selectMode="directory"
+                                initialPath={newDir || '/'}
+                                title="Select Watch Directory"
+                            />
+                        )}
 
                         <div className="flex flex-col gap-2">
                             {config.watchDirectories.length === 0 ? (
