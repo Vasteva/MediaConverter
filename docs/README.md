@@ -5,7 +5,7 @@ Welcome to the Vastiva Media Converter documentation. This documentation provide
 ## 📚 Documentation Index
 
 ### Getting Started
-- **[Deployment Guide](getting-started/deployment.md)** - Production deployment with GitLab CI/CD and Docker
+- **[Deployment Guide](getting-started/deployment.md)** - Production deployment with GitHub Actions and Docker
 
 ### Architecture
 - **[System Overview](architecture/overview.md)** - High-level architecture, data flows, and technology stack
