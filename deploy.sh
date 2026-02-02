@@ -39,7 +39,7 @@ SCANNER_ENABLED=false
 SCANNER_MODE=manual
 SCANNER_PROCESSED_FILE=/data/processed.json
 MEDIA_ROOT=/mnt/media
-CI_REGISTRY_IMAGE=ghcr.io/vasteva/mediaconverter
+IMAGE_NAME=ghcr.io/vasteva/mediaconverter
 EOF
     echo "⚠️  Please edit $ENV_FILE with your configuration"
     echo "Then run this script again to complete deployment"
@@ -68,15 +68,15 @@ if ! command -v docker-compose &> /dev/null; then
     chmod +x /usr/local/bin/docker-compose
 fi
 
-# Login to GitLab Container Registry if credentials are provided
-if [ -n "$CI_REGISTRY_USER" ] && [ -n "$CI_REGISTRY_PASSWORD" ]; then
-    echo "Logging into GitLab Container Registry..."
-    echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin ghcr.io
+# Login to GitHub Container Registry if credentials are provided
+if [ -n "$GITHUB_ACTOR" ] && [ -n "$GITHUB_TOKEN" ]; then
+    echo "Logging into GitHub Container Registry..."
+    echo "$GITHUB_TOKEN" | docker login -u "$GITHUB_ACTOR" --password-stdin ghcr.io
 fi
 
 # Pull latest image
 echo "Pulling latest Vastiva image..."
-docker pull "$CI_REGISTRY_IMAGE:latest" || echo "Warning: Could not pull from registry, will use local build"
+docker pull "$IMAGE_NAME:latest" || echo "Warning: Could not pull from registry, will use local build"
 
 # Stop existing container
 if [ "$(docker ps -q -f name=vastiva)" ]; then
