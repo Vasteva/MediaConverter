@@ -318,6 +318,14 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 	})
 
 	// Scanner Config
+	// Scanner Status
+	api.Get("/scanner/status", func(c *fiber.Ctx) error {
+		if fs == nil {
+			return c.Status(503).JSON(fiber.Map{"error": "Scanner not initialized"})
+		}
+		return c.JSON(fs.GetStatus())
+	})
+
 	api.Get("/scanner/config", func(c *fiber.Ctx) error {
 		if fs == nil {
 			return c.Status(503).JSON(fiber.Map{"error": "Scanner not initialized"})
@@ -358,6 +366,22 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		}
 
 		return c.JSON(fiber.Map{"success": true})
+	})
+
+	// Trigger Manual Scan
+	api.Post("/scanner/scan", func(c *fiber.Ctx) error {
+		if fs == nil {
+			return c.Status(503).JSON(fiber.Map{"error": "Scanner not initialized"})
+		}
+
+		// Run scan asynchronously to avoid blocking
+		go func() {
+			if err := fs.ScanAll(); err != nil {
+				log.Printf("[Scanner] Manual scan failed: %v", err)
+			}
+		}()
+
+		return c.JSON(fiber.Map{"success": true, "message": "Scan started"})
 	})
 
 	// AI Search

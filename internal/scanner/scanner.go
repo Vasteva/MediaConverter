@@ -61,6 +61,18 @@ type ScannerConfig struct {
 	OptimizeExtensions []string `json:"optimizeExtensions"` // e.g., [".mkv", ".mp4", ".avi"]
 }
 
+type ScanStatus struct {
+	IsScanning   bool      `json:"isScanning"`
+	CurrentPath  string    `json:"currentPath"`
+	FilesScanned int       `json:"filesScanned"`
+	LastScan     time.Time `json:"lastScan"`
+	LastResult   string    `json:"lastResult"`
+	LastError    string    `json:"lastError"`
+	Duration     string    `json:"duration"`
+}
+
+const ScannerConfigFile = "/data/scanner_config.json"
+
 // Scanner manages automatic file discovery and job creation
 type Scanner struct {
 	config      *ScannerConfig
@@ -68,10 +80,14 @@ type Scanner struct {
 	watcher     *fsnotify.Watcher
 	processedDB *ProcessedDB
 	mu          sync.RWMutex
-	stopCh      chan struct{}
-	wg          sync.WaitGroup
-	ctx         context.Context
-	cancel      context.CancelFunc
+	// Status
+	status   ScanStatus
+	statusMu sync.RWMutex
+
+	stopCh chan struct{}
+	wg     sync.WaitGroup
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // ProcessedDB tracks files that have been processed
@@ -119,8 +135,15 @@ func NewScanner(config *ScannerConfig, jobManager *jobs.Manager) (*Scanner, erro
 		cancel:      cancel,
 	}
 
+	// Try to load persisted config, overriding defaults
+	if err := scanner.loadConfig(); err != nil {
+		log.Printf("[Scanner] No persisted config found or failed to load, using defaults: %v", err)
+	} else {
+		log.Println("[Scanner] Loaded settings from persistence")
+	}
+
 	// Initialize file watcher if needed
-	if config.Mode == ScanModeWatch || config.Mode == ScanModeHybrid {
+	if scanner.config.Mode == ScanModeWatch || scanner.config.Mode == ScanModeHybrid {
 		watcher, err := fsnotify.NewWatcher()
 		if err != nil {
 			cancel()
@@ -223,6 +246,12 @@ func (s *Scanner) GetProcessedFiles() []ProcessedFile {
 	return s.processedDB.GetAll()
 }
 
+func (s *Scanner) GetStatus() ScanStatus {
+	s.statusMu.RLock()
+	defer s.statusMu.RUnlock()
+	return s.status
+}
+
 // CompleteProcessed updates a processed file entry with final stats from a job
 func (s *Scanner) CompleteProcessed(job *jobs.Job) {
 	s.processedDB.MarkProcessed(ProcessedFile{
@@ -244,6 +273,11 @@ func (s *Scanner) UpdateConfig(newCfg *ScannerConfig) error {
 	wasEnabled := s.config.Enabled
 	s.config = newCfg
 	s.mu.Unlock()
+
+	// Persist changes
+	if err := s.saveConfig(); err != nil {
+		log.Printf("[Scanner] Failed to persist config: %v", err)
+	}
 
 	log.Println("[Scanner] Configuration updated, restarting scanner...")
 
@@ -279,6 +313,27 @@ func (s *Scanner) UpdateConfig(newCfg *ScannerConfig) error {
 
 // ScanAll scans all configured directories
 func (s *Scanner) ScanAll() error {
+	s.statusMu.Lock()
+	if s.status.IsScanning {
+		s.statusMu.Unlock()
+		return fmt.Errorf("scan already in progress")
+	}
+	s.status.IsScanning = true
+	s.status.FilesScanned = 0
+	s.status.CurrentPath = "Initializing..."
+	startTime := time.Now()
+	s.statusMu.Unlock()
+
+	defer func() {
+		duration := time.Since(startTime)
+		s.statusMu.Lock()
+		s.status.IsScanning = false
+		s.status.LastScan = time.Now()
+		s.status.Duration = duration.String()
+		s.status.CurrentPath = ""
+		s.statusMu.Unlock()
+	}()
+
 	log.Println("[Scanner] Starting full scan of all directories")
 
 	var allErrors []error
@@ -302,14 +357,24 @@ func (s *Scanner) ScanAll() error {
 					jobsCreated++
 				}
 			}
+
+			s.statusMu.Lock()
+			s.status.FilesScanned++
+			s.statusMu.Unlock()
 		}
 	}
 
-	log.Printf("[Scanner] Scan complete: %d files found, %d jobs created", filesFound, jobsCreated)
-
+	s.statusMu.Lock()
+	s.status.LastResult = fmt.Sprintf("Scan complete: %d files found, %d jobs created", filesFound, jobsCreated)
 	if len(allErrors) > 0 {
+		s.status.LastError = fmt.Sprintf("Completed with %d errors", len(allErrors))
+		s.statusMu.Unlock()
 		return fmt.Errorf("scan completed with %d errors", len(allErrors))
 	}
+	s.status.LastError = "" // clear previous errors
+	s.statusMu.Unlock()
+
+	log.Printf("[Scanner] %s", s.status.LastResult)
 
 	return nil
 }
@@ -336,6 +401,12 @@ func (s *Scanner) scanDirectory(watchDir WatchDirectory) ([]string, error) {
 		if s.matchesPatterns(path, watchDir) {
 			files = append(files, path)
 		}
+
+		// Update status periodically or per file? doing it here might be too chatty for lock
+		// Let's just track current path in loop
+		s.statusMu.Lock()
+		s.status.CurrentPath = path
+		s.statusMu.Unlock()
 
 		return nil
 	}
@@ -739,4 +810,49 @@ func calculateFileHash(path string) (string, error) {
 	}
 
 	return fmt.Sprintf("%x", hash.Sum(nil)), nil
+}
+
+// Persistence
+
+func (s *Scanner) saveConfig() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	data, err := json.MarshalIndent(s.config, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(ScannerConfigFile, data, 0644)
+}
+
+func (s *Scanner) loadConfig() error {
+	data, err := os.ReadFile(ScannerConfigFile)
+	if err != nil {
+		return err
+	}
+
+	var newCfg ScannerConfig
+	if err := json.Unmarshal(data, &newCfg); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	// Merge strategies could go here, for now we overwrite completely as this file is the authority
+	// But we need to be careful if env vars initially provided something critical not in JSON.
+	// For scanner config, JSON should be complete.
+	if newCfg.ExtractExtensions == nil {
+		newCfg.ExtractExtensions = []string{".iso"}
+	}
+	if newCfg.OptimizeExtensions == nil {
+		newCfg.OptimizeExtensions = []string{
+			".mkv", ".mp4", ".avi", ".mov", ".m4v",
+			".mpg", ".mpeg", ".wmv", ".flv", ".webm",
+		}
+	}
+
+	s.config = &newCfg
+	s.mu.Unlock()
+
+	return nil
 }

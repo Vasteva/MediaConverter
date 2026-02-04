@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 type GeminiProvider struct {
@@ -18,6 +19,9 @@ func NewGeminiProvider(apiKey, model string) *GeminiProvider {
 	if model == "" {
 		model = "gemini-1.5-flash"
 	}
+	// Sanitize model name to avoid double "models/" in URL
+	model = strings.TrimPrefix(model, "models/")
+
 	return &GeminiProvider{APIKey: apiKey, Model: model}
 }
 

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import '../index.css'; // Ensure we have access to variables
 
 interface FileEntry {
@@ -34,8 +35,7 @@ export default function FileBrowserModal({
     onSelect,
     title = 'Select File or Directory',
     initialPath = '/storage',
-    selectMode = 'both',
-    zIndex = 1000
+    selectMode = 'both'
 }: FileBrowserModalProps) {
     const [currentPath, setCurrentPath] = useState(initialPath);
     const [files, setFiles] = useState<FileEntry[]>([]);
@@ -118,46 +118,109 @@ export default function FileBrowserModal({
         }
     };
 
+    // Body scroll lock
+    useEffect(() => {
+        if (isOpen) {
+            document.body.style.overflow = 'hidden';
+            document.body.style.paddingRight = '0px'; // Prevent shift if possible
+        } else {
+            document.body.style.overflow = '';
+            document.body.style.paddingRight = '';
+        }
+        return () => {
+            document.body.style.overflow = '';
+            document.body.style.paddingRight = '';
+        };
+    }, [isOpen]);
+
     if (!isOpen) return null;
 
-    return (
-        <div className="modal-backdrop" onClick={onClose} style={{ zIndex }}>
-            <div className="modal-content file-browser-modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '800px', width: '90%', maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
-                <div className="modal-header">
-                    <h3>{title}</h3>
-                    <button className="btn-icon" onClick={onClose}>✕</button>
-                </div>
+    // Use a dedicated styling object to avoid CSS file collisions
+    const styles = {
+        backdrop: {
+            position: 'fixed' as const,
+            top: 0,
+            left: 0,
+            width: '100vw',
+            height: '100vh',
+            backgroundColor: 'rgba(0, 0, 0, 0.75)',
+            backdropFilter: 'blur(8px)',
+            zIndex: 100000,
+            display: 'block'
+        },
+        modal: {
+            position: 'fixed' as const,
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            maxWidth: '1000px',
+            width: '90vw',
+            maxHeight: '90vh',
+            backgroundColor: 'var(--bg-secondary)',
+            borderRadius: '16px',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
+            border: '1px solid var(--border-color)',
+            display: 'flex',
+            flexDirection: 'column' as const,
+            overflow: 'hidden',
+            zIndex: 100001
+        }
+    };
 
-                <div className="file-browser-controls" style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                    <button className="btn btn-sm btn-secondary" onClick={handleUp} disabled={currentPath === '/'}>
-                        <span style={{ fontSize: '1.2em', lineHeight: '0.5' }}>↑</span> Up
+    return createPortal(
+        <div className="file-browser-portal-wrapper">
+            <div
+                className="modal-backdrop-custom"
+                onClick={onClose}
+                style={styles.backdrop}
+            />
+            <div
+                className="modal-content-custom"
+                onClick={e => e.stopPropagation()}
+                style={styles.modal}
+            >
+                <div style={{ padding: '1.5rem', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-tertiary)' }}>
+                    <h3 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 700 }}>{title}</h3>
+                    <button
+                        onClick={onClose}
+                        style={{ background: 'rgba(255,255,255,0.1)', border: 'none', cursor: 'pointer', width: '32px', height: '32px', borderRadius: '50%', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    >
+                        ✕
                     </button>
-                    <input
-                        type="text"
-                        className="input"
-                        value={currentPath}
-                        readOnly
-                        style={{ fontFamily: 'monospace' }}
-                    />
                 </div>
 
-                <div className="file-list" style={{ flex: 1, overflowY: 'auto', padding: '0.5rem' }}>
+                <div style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', gap: '0.75rem', alignItems: 'center', background: 'var(--bg-secondary)' }}>
+                    <button className="btn btn-secondary" onClick={handleUp} disabled={currentPath === '/'} style={{ padding: '0.5rem 1rem' }}>
+                        <span>↑</span> Up
+                    </button>
+                    <div style={{ flex: 1, position: 'relative' }}>
+                        <input
+                            type="text"
+                            className="input"
+                            value={currentPath}
+                            readOnly
+                            style={{ fontFamily: 'monospace', width: '100%', padding: '0.6rem 1rem', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: '6px' }}
+                        />
+                    </div>
+                </div>
+
+                <div style={{ flex: 1, overflowY: 'auto', padding: '0px', background: 'var(--bg-secondary)' }}>
                     {loading ? (
-                        <div className="flex justify-center p-8">
-                            <div className="spinner"></div>
+                        <div style={{ display: 'flex', justifyContent: 'center', padding: '4rem' }}>
+                            <div className="spinner-lg" />
                         </div>
                     ) : error ? (
-                        <div className="p-4 text-danger bg-danger-low rounded">
+                        <div style={{ margin: '1rem', padding: '1rem', background: 'rgba(239, 68, 68, 0.1)', color: 'var(--status-failed)', borderRadius: '8px', border: '1px solid var(--status-failed)' }}>
                             {error}
                         </div>
                     ) : (
-                        <table className="table" style={{ fontSize: '0.9rem' }}>
-                            <thead>
+                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                            <thead style={{ position: 'sticky', top: 0, background: 'var(--bg-tertiary)', zIndex: 10 }}>
                                 <tr>
-                                    <th style={{ width: '40px' }}></th>
-                                    <th>Name</th>
-                                    <th style={{ width: '100px' }}>Size</th>
-                                    <th style={{ width: '150px' }}>Date</th>
+                                    <th style={{ width: '60px', padding: '1rem', borderBottom: '2px solid var(--border-color)' }}></th>
+                                    <th style={{ textAlign: 'left', padding: '1rem', borderBottom: '2px solid var(--border-color)', fontWeight: 600 }}>Name</th>
+                                    <th style={{ width: '120px', textAlign: 'left', padding: '1rem', borderBottom: '2px solid var(--border-color)', fontWeight: 600 }}>Size</th>
+                                    <th style={{ width: '150px', textAlign: 'left', padding: '1rem', borderBottom: '2px solid var(--border-color)', fontWeight: 600 }}>Modified</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -170,20 +233,22 @@ export default function FileBrowserModal({
                                             onDoubleClick={() => file.isDir && handleNavigate(file.path)}
                                             style={{
                                                 cursor: 'pointer',
-                                                background: isSelected ? 'rgba(61, 217, 208, 0.1)' : undefined,
-                                                borderLeft: isSelected ? '3px solid var(--brand-teal)' : '3px solid transparent'
+                                                background: isSelected ? 'rgba(61, 217, 208, 0.15)' : 'transparent',
+                                                transition: 'background 0.1s ease',
+                                                borderLeft: isSelected ? '4px solid var(--brand-teal)' : '4px solid transparent'
                                             }}
+                                            className="file-row-hover"
                                         >
-                                            <td style={{ textAlign: 'center' }}>
+                                            <td style={{ textAlign: 'center', padding: '1rem', borderBottom: '1px solid var(--border-color)', fontSize: '1.2rem' }}>
                                                 {file.isDir ? '📁' : '📄'}
                                             </td>
-                                            <td style={{ fontWeight: file.isDir ? 600 : 400 }}>
+                                            <td style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', fontWeight: file.isDir ? 600 : 400 }}>
                                                 {file.name}
                                             </td>
-                                            <td className="text-secondary text-xs">
+                                            <td style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
                                                 {file.isDir ? '-' : (file.size / 1024 / 1024).toFixed(2) + ' MB'}
                                             </td>
-                                            <td className="text-secondary text-xs">
+                                            <td style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
                                                 {file.modTime ? new Date(file.modTime).toLocaleDateString() : '-'}
                                             </td>
                                         </tr>
@@ -191,7 +256,9 @@ export default function FileBrowserModal({
                                 })}
                                 {(!files || files.length === 0) && (
                                     <tr>
-                                        <td colSpan={4} className="text-center text-secondary p-4">Empty directory</td>
+                                        <td colSpan={4} style={{ textAlign: 'center', padding: '4rem', color: 'var(--text-secondary)' }}>
+                                            No files or folders found.
+                                        </td>
                                     </tr>
                                 )}
                             </tbody>
@@ -199,10 +266,10 @@ export default function FileBrowserModal({
                     )}
                 </div>
 
-                <div className="modal-footer" style={{ padding: '1rem', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-                    <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+                <div style={{ padding: '1.25rem', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'flex-end', gap: '1rem', background: 'var(--bg-tertiary)' }}>
+                    <button className="btn btn-secondary" onClick={onClose} style={{ minWidth: '100px' }}>Cancel</button>
                     {(selectMode === 'directory' || selectMode === 'both') && (
-                        <button className="btn btn-secondary" onClick={handleSelectCurrent}>
+                        <button className="btn btn-secondary" onClick={handleSelectCurrent} style={{ minWidth: '160px' }}>
                             Select Current Folder
                         </button>
                     )}
@@ -210,11 +277,13 @@ export default function FileBrowserModal({
                         className="btn btn-primary"
                         onClick={handleConfirmSelection}
                         disabled={!selectedItem && selectMode === 'file'}
+                        style={{ minWidth: '120px' }}
                     >
-                        {selectedItem ? `Select "${selectedItem.name}"` : 'Select'}
+                        {selectedItem ? `Select Selected` : 'Select'}
                     </button>
                 </div>
             </div>
-        </div>
+        </div>,
+        document.body
     );
 }

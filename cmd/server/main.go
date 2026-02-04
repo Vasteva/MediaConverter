@@ -58,6 +58,12 @@ func main() {
 	if watchDirsFile == "" {
 		watchDirsFile = "./scanner-config.json"
 	}
+	// Use persistent storage for jobs by default
+	if os.Getenv("JOBS_FILE") == "" {
+		if err := os.Setenv("JOBS_FILE", "/data/jobs.json"); err != nil {
+			log.Printf("Warning: Failed to set default jobs file: %v", err)
+		}
+	}
 
 	scannerCfg, err := scanner.LoadScannerConfig(cfg, watchDirsFile)
 	if err != nil {

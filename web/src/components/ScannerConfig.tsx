@@ -7,6 +7,16 @@ interface ScannerConfigProps {
     onSave: (config: ScannerConfig) => Promise<boolean>;
 }
 
+interface ScanStatus {
+    isScanning: boolean;
+    currentPath: string;
+    filesScanned: number;
+    lastScan?: string;
+    lastResult?: string;
+    lastError?: string;
+    duration?: string;
+}
+
 export default function ScannerConfigComponent({ config: initialConfig, onSave }: ScannerConfigProps) {
     // Ensure watchDirectories is always an array to prevent crashes
     const ensureConfig = (cfg: ScannerConfig) => ({
@@ -18,6 +28,28 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
     const [isSaving, setIsSaving] = useState(false);
     const [newDir, setNewDir] = useState('');
     const [showFileBrowser, setShowFileBrowser] = useState(false);
+    const [scanStatus, setScanStatus] = useState<ScanStatus | null>(null);
+
+    useEffect(() => {
+        const fetchStatus = async () => {
+            try {
+                const token = localStorage.getItem('token');
+                const res = await fetch('/api/scanner/status', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    setScanStatus(data);
+                }
+            } catch (e) {
+                console.error("Failed to fetch scan status", e);
+            }
+        };
+
+        fetchStatus();
+        const interval = setInterval(fetchStatus, 2000);
+        return () => clearInterval(interval);
+    }, []);
 
     // Update local state if initialConfig changes
     useEffect(() => {
@@ -61,6 +93,40 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
                 <h1>Scanner Configuration</h1>
                 <p className="text-secondary">Configure automatic file discovery and processing</p>
             </div>
+
+            {/* Status Card */}
+            {scanStatus && (
+                <div className="card mb-6" style={{ borderLeft: scanStatus.isScanning ? '4px solid var(--brand-teal)' : '4px solid transparent' }}>
+                    <div className="card-body flex items-center justify-between">
+                        <div>
+                            <h3 className="text-lg font-medium mb-1">
+                                {scanStatus.isScanning ? 'Scanner Running...' : 'Scanner Idle'}
+                            </h3>
+                            <div className="text-secondary text-sm">
+                                {scanStatus.isScanning ? (
+                                    <span>Scanning: <span className="font-mono text-primary">{scanStatus.currentPath?.split('/').pop() || 'Initializing...'}</span></span>
+                                ) : (
+                                    <div className="flex flex-col gap-1">
+                                        <span>Last scan: {scanStatus.lastScan ? new Date(scanStatus.lastScan).toLocaleString() : 'Never'}</span>
+                                        {scanStatus.duration && <span className="text-xs opacity-70">Duration: {scanStatus.duration}</span>}
+                                        {scanStatus.lastResult && <span className="text-success font-medium">{scanStatus.lastResult}</span>}
+                                        {scanStatus.lastError && <span className="text-danger font-medium">{scanStatus.lastError}</span>}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                        <div className="text-right">
+                            <div className="text-2xl font-bold">{scanStatus.filesScanned}</div>
+                            <div className="text-xs text-secondary uppercase tracking-wider">Files Scanned</div>
+                        </div>
+                    </div>
+                    {scanStatus.isScanning && (
+                        <div className="h-1 bg-tertiary w-full overflow-hidden relative">
+                            <div className="absolute inset-0 bg-primary opacity-50 w-1/2 animate-progress-indeterminate"></div>
+                        </div>
+                    )}
+                </div>
+            )}
 
             <div className="grid grid-2">
                 {/* General Settings */}
@@ -281,6 +347,33 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
                     ) : (
                         'Save Configuration'
                     )}
+                </button>
+                <button
+                    type="button"
+                    className="btn btn-secondary btn-lg"
+                    onClick={() => {
+                        // Optimistic update
+                        if (scanStatus) {
+                            setScanStatus({ ...scanStatus, isScanning: true, currentPath: 'Starting...' });
+                        }
+                        fetch('/api/scanner/scan', {
+                            method: 'POST',
+                            headers: {
+                                'Authorization': `Bearer ${localStorage.getItem('token')}`
+                            }
+                        })
+                            .then(res => {
+                                if (!res.ok) {
+                                    alert('Failed to start scan');
+                                    // Revert optimistic update nicely via next poll, but we can also unset locally if we want
+                                }
+                            })
+                            .catch(err => alert('Error starting scan: ' + err.message));
+                    }}
+                    disabled={scanStatus?.isScanning}
+                    style={{ marginRight: '1rem' }}
+                >
+                    {scanStatus?.isScanning ? 'Scanning...' : 'Scan Now'}
                 </button>
             </div>
         </div>

@@ -307,6 +307,8 @@ func (m *Manager) runOptimization(job *Job) error {
 		if suggestedCRF, err := cleaner.AnalyzeEncoding(job.ctx, info.RawJSON); err == nil {
 			log.Printf("[Premium] AI suggested CRF: %d (System Default: %d)", suggestedCRF, crf)
 			crf = suggestedCRF
+		} else {
+			log.Printf("[Premium] AI analysis failed: %v", err)
 		}
 	}
 
