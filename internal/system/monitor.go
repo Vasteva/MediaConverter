@@ -147,9 +147,37 @@ func getGPUStats() (float64, float64) {
 			}
 		}
 
-		// For temp, checking sysfs is standard for some but not consistent via intel_gpu_top JSON
-		// Let's return 0 temp for now or try to match "actual": freq? No temp in JSON usually.
-		return maxBusy, 0
+		if maxBusy > 0 {
+			return maxBusy, 0
+		}
+	}
+
+	// 3. Fallback: Check for running ffmpeg processes with hardware acceleration flags
+	// This provides a visual indication of activity even if we can't get precise metrics
+	// due to container permission limits.
+	pgrepOut, err := exec.Command("pgrep", "-a", "ffmpeg").Output()
+	if err == nil {
+		processes := strings.Split(string(pgrepOut), "\n")
+		gpuProcessCount := 0
+		for _, p := range processes {
+			lowerP := strings.ToLower(p)
+			// Check for VAAPI, QSV, NVENC, CUDA flags
+			if strings.Contains(lowerP, "vaapi") ||
+				strings.Contains(lowerP, "qsv") ||
+				strings.Contains(lowerP, "nvenc") ||
+				strings.Contains(lowerP, "cuda") {
+				gpuProcessCount++
+			}
+		}
+
+		if gpuProcessCount > 0 {
+			// Estimate ~40% load per stream, capped at 90%
+			estimatedLoad := float64(gpuProcessCount) * 40.0
+			if estimatedLoad > 90.0 {
+				estimatedLoad = 90.0
+			}
+			return estimatedLoad, 0
+		}
 	}
 
 	return 0, 0
