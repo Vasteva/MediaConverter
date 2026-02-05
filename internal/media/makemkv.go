@@ -52,6 +52,7 @@ type ExtractOptions struct {
 // ScanDisc scans a disc or ISO and returns available titles
 func (m *MakeMKVWrapper) ScanDisc(ctx context.Context, sourcePath string) (*DiscInfo, error) {
 	args := []string{
+		"-r",
 		"info",
 		fmt.Sprintf("file:%s", sourcePath),
 	}
@@ -74,7 +75,7 @@ func (m *MakeMKVWrapper) Extract(ctx context.Context, opts ExtractOptions) error
 func (m *MakeMKVWrapper) ExtractWithProgress(ctx context.Context, opts ExtractOptions, callback ProgressCallback) error {
 	// Determine what to extract
 	titleArg := "all"
-	if opts.TitleIndex > 0 {
+	if opts.TitleIndex >= 0 {
 		titleArg = strconv.Itoa(opts.TitleIndex)
 	}
 

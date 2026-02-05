@@ -221,35 +221,32 @@ func (m *Manager) processJob(job *Job) {
 		if strings.HasSuffix(lowerPath, ".iso") || strings.HasSuffix(lowerPath, ".img") || strings.HasSuffix(lowerPath, ".mdf") {
 			log.Printf("[Job %s] Detected disc image input. Starting auto-extraction...", job.ID)
 
-			// Auto-extract first
-			extractDir := filepath.Join(filepath.Dir(job.DestinationPath), "extract_"+job.ID)
-			if err := os.MkdirAll(extractDir, 0755); err != nil {
-				job.Status = StatusFailed
-				job.Error = fmt.Sprintf("failed to create extract dir: %v", err)
-				break
-			}
-
 			if m.makemkv == nil {
-				job.Status = StatusFailed
-				job.Error = "makemkv not installed"
+				err = fmt.Errorf("makemkv not installed")
 				break
 			}
 
 			// Scan disc
-			info, err := m.makemkv.ScanDisc(job.ctx, cleanPath)
+			var info *media.DiscInfo
+			info, err = m.makemkv.ScanDisc(job.ctx, cleanPath)
 			if err != nil {
-				job.Status = StatusFailed
-				job.Error = fmt.Sprintf("scan failed: %v", err)
+				err = fmt.Errorf("scan failed: %v", err)
 				break
 			}
 			if len(info.Titles) == 0 {
-				job.Status = StatusFailed
-				job.Error = "no titles found"
+				err = fmt.Errorf("no titles found on disc")
 				break
 			}
 
 			mainTitleIdx := info.FindLargestTitle()
-			log.Printf("[Job %s] Identified main feature: Title %d", job.ID, mainTitleIdx)
+			log.Printf("[Job %s] Identified main feature: Title %d (Total titles: %d)", job.ID, mainTitleIdx, len(info.Titles))
+
+			// Auto-extract first
+			extractDir := filepath.Join(filepath.Dir(job.DestinationPath), "extract_"+job.ID)
+			if err = os.MkdirAll(extractDir, 0755); err != nil {
+				err = fmt.Errorf("failed to create extract dir: %v", err)
+				break
+			}
 
 			opts := media.ExtractOptions{
 				SourcePath: cleanPath,
@@ -257,22 +254,20 @@ func (m *Manager) processJob(job *Job) {
 				TitleIndex: mainTitleIdx,
 			}
 
-			extractErr := m.makemkv.ExtractWithProgress(job.ctx, opts, func(p media.TranscodeProgress) {
+			err = m.makemkv.ExtractWithProgress(job.ctx, opts, func(p media.TranscodeProgress) {
 				job.Progress = p.Percentage / 2 // First 50%
 				m.Save()
 			})
 
-			if extractErr != nil {
-				job.Status = StatusFailed
-				job.Error = fmt.Sprintf("extraction failed: %v", extractErr)
+			if err != nil {
+				err = fmt.Errorf("extraction failed: %v", err)
 				break
 			}
 
 			// Find the extracted file
 			files, _ := filepath.Glob(filepath.Join(extractDir, "*.mkv"))
 			if len(files) == 0 {
-				job.Status = StatusFailed
-				job.Error = "extraction finished but no output file found"
+				err = fmt.Errorf("extraction finished but no output file found")
 				break
 			}
 
