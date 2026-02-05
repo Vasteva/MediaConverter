@@ -20,8 +20,13 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o vastiva ./cmd/server
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install FFmpeg and hardware drivers
+# Install dependencies and MakeMKV
 RUN apt-get update && apt-get install -y \
+    software-properties-common \
+    && add-apt-repository ppa:heyarje/makemkv-beta \
+    && apt-get update \
+    && echo "makemkv-bin makemkv-bin/accepted-eula boolean true" | debconf-set-selections \
+    && apt-get install -y \
     ffmpeg \
     libva-drm2 libva2 vainfo \
     intel-gpu-tools \
@@ -30,6 +35,7 @@ RUN apt-get update && apt-get install -y \
     i965-va-driver-shaders \
     ca-certificates \
     curl \
+    makemkv-bin makemkv-oss \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
