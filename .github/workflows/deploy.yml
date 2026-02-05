@@ -2,7 +2,7 @@ name: Deploy to Production
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
 
 env:
   REGISTRY: ghcr.io
@@ -57,14 +57,14 @@ jobs:
           cd /opt/vastiva
           # Convert repo name to lowercase for docker pull
           REPO_LOWER=$(echo "${REGISTRY}/${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')
-          
+
           # Login to registry (reusing GitHub token)
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          
+
           # Pull and restart
           docker pull $REPO_LOWER:latest
-          docker-compose down
-          docker-compose up -d
+          docker compose down
+          docker compose up -d
           docker image prune -f
-          
+
           echo "Deployment complete! Application running on port 8091"
