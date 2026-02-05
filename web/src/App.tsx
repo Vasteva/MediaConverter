@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import './App.css';
 import Header from './components/Header';
 import Dashboard from './components/Dashboard';
@@ -34,8 +34,26 @@ function App() {
   }, []);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Helper functions - Define early to avoid hoisting issues
+  const handleLogout = useCallback(() => {
+    setToken(null);
+    localStorage.removeItem('token');
+    // Clear data
+    setJobs([]);
+    setConfig(null);
+    setScannerConfig(null);
+    setStats(null);
+    setDashboardStats(null);
+  }, []);
+
+  const handleLogin = useCallback((newToken: string) => {
+    setToken(newToken);
+    localStorage.setItem('token', newToken);
+    setIsLoading(true);
+  }, []);
+
   // Helper for authenticated requests
-  const authFetch = async (url: string, options: RequestInit = {}) => {
+  const authFetch = useCallback(async (url: string, options: RequestInit = {}) => {
     const headers = {
       ...options.headers,
       'Authorization': `Bearer ${token}`
@@ -49,24 +67,7 @@ function App() {
     }
 
     return response;
-  };
-
-  const handleLogin = (newToken: string) => {
-    setToken(newToken);
-    localStorage.setItem('token', newToken);
-    setIsLoading(true);
-  };
-
-  const handleLogout = () => {
-    setToken(null);
-    localStorage.removeItem('token');
-    // Clear data
-    setJobs([]);
-    setConfig(null);
-    setScannerConfig(null);
-    setStats(null);
-    setDashboardStats(null);
-  };
+  }, [token, handleLogout]);
 
   // Load theme from localStorage
   useEffect(() => {
@@ -78,15 +79,17 @@ function App() {
   }, []);
 
   // Toggle theme
-  const toggleTheme = () => {
-    const newTheme = theme === 'light' ? 'dark' : 'light';
-    setTheme(newTheme);
-    localStorage.setItem('theme', newTheme);
-    document.documentElement.setAttribute('data-theme', newTheme);
-  };
+  const toggleTheme = useCallback(() => {
+    setTheme(prev => {
+      const newTheme = prev === 'light' ? 'dark' : 'light';
+      localStorage.setItem('theme', newTheme);
+      document.documentElement.setAttribute('data-theme', newTheme);
+      return newTheme;
+    });
+  }, []);
 
   // Fetch stats from API
-  const fetchStats = async () => {
+  const fetchStats = useCallback(async () => {
     if (!token) return;
     try {
       const response = await authFetch('/api/stats');
@@ -104,10 +107,10 @@ function App() {
     } catch (error) {
       console.error('Failed to fetch stats:', error);
     }
-  };
+  }, [token, authFetch]);
 
   // Fetch jobs from API
-  const fetchJobs = async () => {
+  const fetchJobs = useCallback(async () => {
     if (!token) return;
     try {
       const response = await authFetch('/api/jobs');
@@ -118,10 +121,10 @@ function App() {
     } catch (error) {
       console.error('Failed to fetch jobs:', error);
     }
-  };
+  }, [token, authFetch]);
 
   // Fetch configs from API
-  const fetchConfigs = async () => {
+  const fetchConfigs = useCallback(async () => {
     if (!token) {
       setIsLoading(false);
       return;
@@ -145,7 +148,7 @@ function App() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [token, authFetch]);
 
   // Initial data fetch
   useEffect(() => {
@@ -156,19 +159,21 @@ function App() {
     } else {
       setIsLoading(false);
     }
-  }, [token]);
+  }, [token, fetchJobs, fetchConfigs, fetchStats]);
 
   // Poll for updates every 2 seconds
   useEffect(() => {
+    if (!token) return;
+
     const interval = setInterval(() => {
       fetchJobs();
       fetchStats();
     }, 2000);
     return () => clearInterval(interval);
-  }, []);
+  }, [token, fetchJobs, fetchStats]);
 
   // Create new job
-  const createJob = async (jobData: Partial<Job>) => {
+  const createJob = useCallback(async (jobData: Partial<Job>) => {
     try {
       const response = await authFetch('/api/jobs', {
         method: 'POST',
@@ -184,10 +189,10 @@ function App() {
       console.error('Failed to create job:', error);
       return false;
     }
-  };
+  }, [authFetch, fetchJobs]);
 
   // Cancel job
-  const cancelJob = async (jobId: string) => {
+  const cancelJob = useCallback(async (jobId: string) => {
     try {
       const response = await authFetch(`/api/jobs/${jobId}`, {
         method: 'DELETE',
@@ -201,10 +206,10 @@ function App() {
       console.error('Failed to cancel job:', error);
       return false;
     }
-  };
+  }, [authFetch, fetchJobs]);
 
   // Update System Config
-  const updateSystemConfig = async (newConfig: Partial<SystemConfig>) => {
+  const updateSystemConfig = useCallback(async (newConfig: Partial<SystemConfig>) => {
     try {
       const response = await authFetch('/api/config', {
         method: 'POST',
@@ -220,10 +225,10 @@ function App() {
       console.error('Failed to update system config:', error);
       return false;
     }
-  };
+  }, [authFetch, fetchConfigs]);
 
   // Update Scanner Config
-  const updateScannerConfig = async (newConfig: ScannerConfig) => {
+  const updateScannerConfig = useCallback(async (newConfig: ScannerConfig) => {
     try {
       const response = await authFetch('/api/scanner/config', {
         method: 'POST',
@@ -239,7 +244,7 @@ function App() {
       console.error('Failed to update scanner config:', error);
       return false;
     }
-  };
+  }, [authFetch, fetchConfigs]);
 
   if (showSetupWizard) {
     return <SetupWizard onComplete={() => setShowSetupWizard(false)} />;
