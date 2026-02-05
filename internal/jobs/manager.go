@@ -213,22 +213,21 @@ func (m *Manager) processJob(job *Job) {
 	case JobTypeExtract:
 		err = m.runExtraction(job)
 	case JobTypeOptimize:
-		ext := strings.ToLower(filepath.Ext(job.SourcePath))
-		if ext == ".iso" || ext == ".img" || ext == ".mdf" {
+		cleanPath := strings.TrimSpace(job.SourcePath)
+		lowerPath := strings.ToLower(cleanPath)
+		ext := filepath.Ext(cleanPath)
+		log.Printf("[Job %s] Checking path for auto-extraction: '%s' (Ext: '%s')", job.ID, cleanPath, ext)
+
+		if strings.HasSuffix(lowerPath, ".iso") || strings.HasSuffix(lowerPath, ".img") || strings.HasSuffix(lowerPath, ".mdf") {
 			log.Printf("[Job %s] Detected disc image input. Starting auto-extraction...", job.ID)
 
 			// Auto-extract first
-			// Create a temporary extraction folder
 			extractDir := filepath.Join(filepath.Dir(job.DestinationPath), "extract_"+job.ID)
 			if err := os.MkdirAll(extractDir, 0755); err != nil {
 				job.Status = StatusFailed
 				job.Error = fmt.Sprintf("failed to create extract dir: %v", err)
 				break
 			}
-
-			// Need a temporary job struct to reuse runExtraction logic or call makemkv directly
-			// Calling runExtraction on THIS job would be confusing status-wise, but efficient code-wise.
-			// Let's call m.makemkv.ExtractWithProgress directly.
 
 			if m.makemkv == nil {
 				job.Status = StatusFailed
@@ -237,7 +236,7 @@ func (m *Manager) processJob(job *Job) {
 			}
 
 			// Scan disc
-			info, err := m.makemkv.ScanDisc(job.ctx, job.SourcePath)
+			info, err := m.makemkv.ScanDisc(job.ctx, cleanPath)
 			if err != nil {
 				job.Status = StatusFailed
 				job.Error = fmt.Sprintf("scan failed: %v", err)
@@ -253,19 +252,14 @@ func (m *Manager) processJob(job *Job) {
 			log.Printf("[Job %s] Identified main feature: Title %d", job.ID, mainTitleIdx)
 
 			opts := media.ExtractOptions{
-				SourcePath: job.SourcePath,
+				SourcePath: cleanPath,
 				OutputDir:  extractDir,
 				TitleIndex: mainTitleIdx,
 			}
 
 			extractErr := m.makemkv.ExtractWithProgress(job.ctx, opts, func(p media.TranscodeProgress) {
-				// We can reflect extraction progress in the main job, maybe scaled 0-50%?
-				// For now let's just show raw percentage but user might see it reset.
-				// Better: show it as part of status or log?
-				// The UI just shows "Processing" and a % bar.
-				// Let's accept 0-100 for extraction, then 0-100 for optimization.
-				job.Progress = p.Percentage
-				m.Save() // Persist updates
+				job.Progress = p.Percentage / 2 // First 50%
+				m.Save()
 			})
 
 			if extractErr != nil {
@@ -282,23 +276,21 @@ func (m *Manager) processJob(job *Job) {
 				break
 			}
 
-			// Update source path to the new extracted file for the optimization step
+			// Update source path for the optimization step
 			originalSource := job.SourcePath
 			job.SourcePath = files[0]
-			log.Printf("[Job %s] Extraction complete. File: %s", job.ID, job.SourcePath)
+			log.Printf("[Job %s] Extraction complete. Proceeding to optimize: %s", job.ID, job.SourcePath)
 
 			// Now proceed to standard optimization
 			err = m.runOptimization(job)
 
-			// Cleanup extraction artifacts if successful (optional, but good for "consolidated")
-			// But maybe user wants to keep the rip? The user said "consolidate if extraction required then extract it".
-			// Usually implies "Extract -> Encode -> Delete Rip".
-			// Let's delete the intermediate rip to save space.
+			// Cleanup
 			if err == nil {
 				os.RemoveAll(extractDir)
-				job.SourcePath = originalSource // Restore original source path for record keeping?
+				job.SourcePath = originalSource
 			}
 		} else {
+			log.Printf("[Job %s] Path does not require extraction. Proceeding directly.", job.ID)
 			err = m.runOptimization(job)
 		}
 	case JobTypeTest:
