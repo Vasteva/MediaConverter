@@ -1,5 +1,15 @@
 # Testing Guide - Vastiva Media Converter
 
+## Standard Testing Environment
+
+All testing for this project is standardized on the following environment:
+
+- **Server:** Proxmox server `pve01.wtzhome.com`
+- **VM ID:** `501`
+- **IP Address:** `192.168.30.21`
+
+Please ensure all integration tests and deployment verifications are performed in this specific environment to ensure consistency.
+
 ## Quick Test Checklist
 
 ### 1. Build Test
