@@ -9,6 +9,8 @@ interface SettingsProps {
 export default function Settings({ config: initialConfig, onConfigUpdate }: SettingsProps) {
     const [config, setConfig] = useState<SystemConfig | null>(initialConfig);
     const [isSaving, setIsSaving] = useState(false);
+    const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+    const [testMessage, setTestMessage] = useState('');
 
     useEffect(() => {
         setConfig(initialConfig);
@@ -22,6 +24,46 @@ export default function Settings({ config: initialConfig, onConfigUpdate }: Sett
         setIsSaving(true);
         await onConfigUpdate(updates);
         setIsSaving(false);
+    };
+
+    const handleTestConnection = async () => {
+        if (!config) return;
+        setTestStatus('testing');
+        setTestMessage('');
+
+        try {
+            const res = await fetch('/api/ai/test', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    provider: config.aiProvider,
+                    apiKey: config.aiApiKey,
+                    endpoint: config.aiEndpoint,
+                    model: config.aiModel
+                })
+            });
+
+            const data = await res.json();
+
+            if (res.ok) {
+                setTestStatus('success');
+                setTestMessage(data.message || 'Connection successful');
+            } else {
+                setTestStatus('error');
+                setTestMessage(data.error || 'Connection failed');
+            }
+        } catch (e) {
+            setTestStatus('error');
+            setTestMessage('Network error');
+        }
+
+        // Reset status after 3 seconds
+        setTimeout(() => {
+            if (testStatus !== 'testing') {
+                setTestStatus('idle');
+                setTestMessage('');
+            }
+        }, 5000);
     };
 
     const isPremium = config.isPremium;
@@ -208,6 +250,21 @@ export default function Settings({ config: initialConfig, onConfigUpdate }: Sett
                                         onBlur={(e) => handleSave({ aiModel: e.target.value })}
                                         disabled={isSaving}
                                     />
+                                </div>
+
+                                <div className="mt-4 flex items-center gap-3">
+                                    <button
+                                        className={`btn ${testStatus === 'success' ? 'btn-success' : testStatus === 'error' ? 'btn-error' : 'btn-secondary'}`}
+                                        onClick={handleTestConnection}
+                                        disabled={testStatus === 'testing' || !config.aiProvider}
+                                    >
+                                        {testStatus === 'testing' ? 'Testing...' : 'Test Connection'}
+                                    </button>
+                                    {testMessage && (
+                                        <span className={`text-sm ${testStatus === 'success' ? 'text-green-400' : 'text-red-400'}`}>
+                                            {testMessage}
+                                        </span>
+                                    )}
                                 </div>
                             </>
                         )}

@@ -8,10 +8,11 @@ vastiva_*
 *.test
 
 # Environment files
+# Environment files
 .env
-.env.test
-.env.local
-.env.*.local
+.env*
+!.env.example
+
 
 # IDE
 .vscode/

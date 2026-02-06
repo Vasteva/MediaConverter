@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"fmt"
 	"log"
@@ -315,6 +316,49 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		}
 
 		return c.JSON(fiber.Map{"success": true})
+	})
+
+	// Test AI Connection
+	api.Post("/ai/test", func(c *fiber.Ctx) error {
+		var req struct {
+			Provider string `json:"provider"`
+			APIKey   string `json:"apiKey"`
+			Endpoint string `json:"endpoint"`
+			Model    string `json:"model"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		if req.Provider == "none" || req.Provider == "" {
+			return c.JSON(fiber.Map{"success": true, "message": "AI disabled"})
+		}
+
+		// Create temporary provider
+		provider, err := ai.NewProvider(ai.AIConfig{
+			Provider: req.Provider,
+			APIKey:   req.APIKey,
+			Endpoint: req.Endpoint,
+			Model:    req.Model,
+		})
+		if err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		// Test connection
+		ctx, cancel := context.WithTimeout(c.Context(), 10*time.Second)
+		defer cancel()
+
+		resp, err := provider.Analyze(ctx, "Reply with 'OK' if you can receive this message.")
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": fmt.Sprintf("Connection failed: %v", err)})
+		}
+
+		return c.JSON(fiber.Map{
+			"success": true,
+			"message": "Connection successful!",
+			"reply":   resp,
+		})
 	})
 
 	// Scanner Config
