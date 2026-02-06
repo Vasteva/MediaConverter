@@ -43,6 +43,7 @@ type Job struct {
 	SourcePath      string    `json:"sourcePath"`
 	DestinationPath string    `json:"destinationPath"`
 	Status          Status    `json:"status"`
+	StatusDetail    string    `json:"statusDetail,omitempty"`
 	Progress        int       `json:"progress"`
 	ETA             string    `json:"eta"`
 	FPS             float64   `json:"fps"`
@@ -220,6 +221,8 @@ func (m *Manager) processJob(job *Job) {
 
 		if strings.HasSuffix(lowerPath, ".iso") || strings.HasSuffix(lowerPath, ".img") || strings.HasSuffix(lowerPath, ".mdf") {
 			log.Printf("[Job %s] Detected disc image input. Starting auto-extraction...", job.ID)
+			job.StatusDetail = "Extracting"
+			m.Save()
 
 			// Ensure destination has a video extension, not a disc image extension
 			destExt := strings.ToLower(filepath.Ext(job.DestinationPath))
@@ -285,6 +288,9 @@ func (m *Manager) processJob(job *Job) {
 			job.SourcePath = files[0]
 			log.Printf("[Job %s] Extraction complete. Proceeding to optimize: %s", job.ID, job.SourcePath)
 
+			job.StatusDetail = "Optimizing"
+			m.Save()
+
 			// Now proceed to standard optimization
 			err = m.runOptimization(job)
 
@@ -295,6 +301,8 @@ func (m *Manager) processJob(job *Job) {
 			}
 		} else {
 			log.Printf("[Job %s] Path does not require extraction. Proceeding directly.", job.ID)
+			job.StatusDetail = "Optimizing"
+			m.Save()
 			err = m.runOptimization(job)
 		}
 	case JobTypeTest:
