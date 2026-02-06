@@ -304,6 +304,7 @@ function App() {
           <Settings
             config={config}
             onConfigUpdate={updateSystemConfig}
+            token={token}
           />
         )}
       </main>

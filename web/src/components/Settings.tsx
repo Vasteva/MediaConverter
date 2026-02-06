@@ -4,9 +4,10 @@ import type { SystemConfig } from '../types';
 interface SettingsProps {
     config: SystemConfig | null;
     onConfigUpdate: (newConfig: Partial<SystemConfig>) => Promise<boolean>;
+    token: string | null;
 }
 
-export default function Settings({ config: initialConfig, onConfigUpdate }: SettingsProps) {
+export default function Settings({ config: initialConfig, onConfigUpdate, token }: SettingsProps) {
     const [config, setConfig] = useState<SystemConfig | null>(initialConfig);
     const [isSaving, setIsSaving] = useState(false);
     const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
@@ -34,7 +35,10 @@ export default function Settings({ config: initialConfig, onConfigUpdate }: Sett
         try {
             const res = await fetch('/api/ai/test', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
                 body: JSON.stringify({
                     provider: config.aiProvider,
                     apiKey: config.aiApiKey,
