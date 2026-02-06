@@ -221,6 +221,15 @@ func (m *Manager) processJob(job *Job) {
 		if strings.HasSuffix(lowerPath, ".iso") || strings.HasSuffix(lowerPath, ".img") || strings.HasSuffix(lowerPath, ".mdf") {
 			log.Printf("[Job %s] Detected disc image input. Starting auto-extraction...", job.ID)
 
+			// Ensure destination has a video extension, not a disc image extension
+			destExt := strings.ToLower(filepath.Ext(job.DestinationPath))
+			if destExt == ".iso" || destExt == ".img" || destExt == ".mdf" {
+				dir := filepath.Dir(job.DestinationPath)
+				base := strings.TrimSuffix(filepath.Base(job.DestinationPath), filepath.Ext(job.DestinationPath))
+				job.DestinationPath = filepath.Join(dir, base+".mkv")
+				log.Printf("[Job %s] Corrected destination extension: %s", job.ID, job.DestinationPath)
+			}
+
 			if m.makemkv == nil {
 				err = fmt.Errorf("makemkv not installed")
 				break
