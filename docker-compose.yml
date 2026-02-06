@@ -1,6 +1,6 @@
 services:
   vastiva:
-    image: ${CI_REGISTRY_IMAGE:-vastiva/mediaconverter}:latest
+    image: ghcr.io/vasteva/mediaconverter:latest
     container_name: vastiva
     environment:
       - PORT=80
