@@ -158,7 +158,7 @@ export default function JobList({ jobs, onCreateJob, onCancelJob }: JobListProps
                                         <td>
                                             <div className="flex flex-col gap-1">
                                                 <span className={`badge badge-${job.status}`} title={job.error || ''}>
-                                                    {job.status}
+                                                    {job.status === 'processing' && job.statusDetail ? job.statusDetail : job.status}
                                                 </span>
                                                 {job.status === 'failed' && job.error && (
                                                     <span className="text-xs text-danger" style={{ maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={job.error}>
@@ -175,7 +175,7 @@ export default function JobList({ jobs, onCreateJob, onCancelJob }: JobListProps
                                                 <div className="flex justify-between mt-1 text-xs text-secondary">
                                                     <span>{job.progress}%</span>
                                                     {job.status === 'processing' && (
-                                                        <span>{job.eta} ({job.fps.toFixed(0)} fps)</span>
+                                                        <span>{job.statusDetail ? job.statusDetail : ''} {job.eta} ({job.fps.toFixed(0)} fps)</span>
                                                     )}
                                                 </div>
                                             </div>

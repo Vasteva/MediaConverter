@@ -4,6 +4,7 @@ export interface Job {
     sourcePath: string;
     destinationPath: string;
     status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
+    statusDetail?: string;
     progress: number;
     eta: string;
     fps: number;
