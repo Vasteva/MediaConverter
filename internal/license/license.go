@@ -29,11 +29,26 @@ func Validate(key string) bool {
 	// In a real app, this would check a remote server or use asymmetric signatures.
 	// Here we just check if the last part is the first 4 chars of a hash of the previous parts.
 	payload := parts[0] + parts[1] + parts[2]
-	h := sha256.New()
-	h.Write([]byte(payload + "salt-secret"))
-	expected := fmt.Sprintf("%x", h.Sum(nil))[:4]
+	expected := generateChecksum(payload)
 
 	return strings.EqualFold(parts[3], expected)
+}
+
+// Generate creates a valid license key for a given user ID
+func Generate(userID string) string {
+	userID = strings.ToUpper(strings.TrimSpace(userID))
+	if userID == "" {
+		userID = "USER"
+	}
+	prefix := "VASTIVA-PRO-" + userID
+	checksum := generateChecksum("VASTIVA" + "PRO" + userID)
+	return prefix + "-" + checksum
+}
+
+func generateChecksum(payload string) string {
+	h := sha256.New()
+	h.Write([]byte(payload + "salt-secret"))
+	return fmt.Sprintf("%x", h.Sum(nil))[:4]
 }
 
 // GetPlanName returns the name of the plan based on the key

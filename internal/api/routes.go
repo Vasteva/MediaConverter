@@ -334,10 +334,20 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			return c.JSON(fiber.Map{"success": true, "message": "AI disabled"})
 		}
 
+		// Check if the API key is masked (e.g. sent from UI without change)
+		apiKey := req.APIKey
+		if strings.Contains(apiKey, "....") && len(apiKey) > 8 {
+			// If it looks masked, check if it matches the current masked key
+			// If so, rely on the stored config key
+			if apiKey == security.MaskKey(cfg.AIApiKey) {
+				apiKey = cfg.AIApiKey
+			}
+		}
+
 		// Create temporary provider
 		provider, err := ai.NewProvider(ai.AIConfig{
 			Provider: req.Provider,
-			APIKey:   req.APIKey,
+			APIKey:   apiKey,
 			Endpoint: req.Endpoint,
 			Model:    req.Model,
 		})
