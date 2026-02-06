@@ -61,6 +61,24 @@ type ScannerConfig struct {
 	OptimizeExtensions []string `json:"optimizeExtensions"` // e.g., [".mkv", ".mp4", ".avi"]
 }
 
+func (c *ScannerConfig) Validate() {
+	if len(c.ExtractExtensions) == 0 {
+		c.ExtractExtensions = []string{".iso"}
+	}
+	if len(c.OptimizeExtensions) == 0 {
+		c.OptimizeExtensions = []string{
+			".mkv", ".mp4", ".avi", ".mov", ".m4v",
+			".mpg", ".mpeg", ".wmv", ".flv", ".webm",
+		}
+	}
+	if c.ProcessedFilePath == "" {
+		c.ProcessedFilePath = "/data/processed.json"
+	}
+	if c.Mode == "" {
+		c.Mode = ScanModeManual
+	}
+}
+
 type ScanStatus struct {
 	IsScanning   bool      `json:"isScanning"`
 	CurrentPath  string    `json:"currentPath"`
@@ -269,6 +287,7 @@ func (s *Scanner) CompleteProcessed(job *jobs.Job) {
 
 // UpdateConfig updates the scanner configuration and restarts if necessary
 func (s *Scanner) UpdateConfig(newCfg *ScannerConfig) error {
+	newCfg.Validate()
 	s.mu.Lock()
 	wasEnabled := s.config.Enabled
 	s.config = newCfg
@@ -837,20 +856,9 @@ func (s *Scanner) loadConfig() error {
 		return err
 	}
 
-	s.mu.Lock()
-	// Merge strategies could go here, for now we overwrite completely as this file is the authority
-	// But we need to be careful if env vars initially provided something critical not in JSON.
-	// For scanner config, JSON should be complete.
-	if newCfg.ExtractExtensions == nil {
-		newCfg.ExtractExtensions = []string{".iso"}
-	}
-	if newCfg.OptimizeExtensions == nil {
-		newCfg.OptimizeExtensions = []string{
-			".mkv", ".mp4", ".avi", ".mov", ".m4v",
-			".mpg", ".mpeg", ".wmv", ".flv", ".webm",
-		}
-	}
+	newCfg.Validate()
 
+	s.mu.Lock()
 	s.config = &newCfg
 	s.mu.Unlock()
 
