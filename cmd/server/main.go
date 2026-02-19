@@ -44,7 +44,7 @@ func main() {
 	// Initialize job manager
 	jobsFile := os.Getenv("JOBS_FILE")
 	if jobsFile == "" {
-		jobsFile = "./jobs.json"
+		jobsFile = "/data/jobs.json"
 	}
 	jobManager, err := jobs.NewManager(cfg, aiProvider, jobsFile)
 	if err != nil {
@@ -56,13 +56,7 @@ func main() {
 	// Initialize file scanner
 	watchDirsFile := os.Getenv("SCANNER_CONFIG_FILE")
 	if watchDirsFile == "" {
-		watchDirsFile = "./scanner-config.json"
-	}
-	// Use persistent storage for jobs by default
-	if os.Getenv("JOBS_FILE") == "" {
-		if err := os.Setenv("JOBS_FILE", "/data/jobs.json"); err != nil {
-			log.Printf("Warning: Failed to set default jobs file: %v", err)
-		}
+		watchDirsFile = "/data/scanner_config.json"
 	}
 
 	scannerCfg, err := scanner.LoadScannerConfig(cfg, watchDirsFile)

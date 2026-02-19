@@ -11,6 +11,8 @@ type Provider interface {
 	Analyze(ctx context.Context, prompt string) (string, error)
 	// Transcribe converts audio/video to text (SRT format preferred)
 	Transcribe(ctx context.Context, audioPath string) (string, error)
+	// VerifyMedia compares original and converted media frames for integrity
+	VerifyMedia(ctx context.Context, originalPaths, convertedPaths []string) (bool, error)
 	// GetName returns the provider name
 	GetName() string
 }

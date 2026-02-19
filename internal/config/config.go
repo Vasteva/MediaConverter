@@ -44,6 +44,10 @@ type Config struct {
 	ScannerAutoCreate    bool   `json:"scannerAutoCreate"`
 	ScannerProcessedFile string `json:"scannerProcessedFile"`
 
+	// Processing
+	VerifyOutput bool `json:"verifyOutput"` // Default: false (Pro only)
+	DeleteSource bool `json:"deleteSource"` // Default: false
+
 	// State
 	IsPremium     bool `json:"-"`
 	IsInitialized bool `json:"-"`
@@ -176,6 +180,9 @@ func (c *Config) loadFromDisk() error {
 		c.ScannerProcessedFile = importJSON.ScannerProcessedFile
 	}
 
+	c.VerifyOutput = importJSON.VerifyOutput
+	c.DeleteSource = importJSON.DeleteSource
+
 	return nil
 }
 
@@ -191,7 +198,11 @@ func (c *Config) Save() error {
 		return err
 	}
 
-	return os.WriteFile(ConfigFile, data, 0644)
+	tmp := ConfigFile + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, ConfigFile)
 }
 
 func checkInitialized(processedFile string) bool {
@@ -209,7 +220,7 @@ func (c *Config) MarkInitialized() error {
 	}
 	initFile := filepath.Join(dir, ".initialized")
 	c.IsInitialized = true
-	return os.WriteFile(initFile, []byte(time.Now().Format(time.RFC3339)), 0644)
+	return os.WriteFile(initFile, []byte(time.Now().Format(time.RFC3339)), 0600)
 }
 
 func getEnv(key, fallback string) string {

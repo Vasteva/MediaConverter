@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { SystemConfig } from '../types';
 
 interface SettingsProps {
@@ -12,18 +12,28 @@ export default function Settings({ config: initialConfig, onConfigUpdate, token 
     const [isSaving, setIsSaving] = useState(false);
     const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
     const [testMessage, setTestMessage] = useState('');
+    const [saveError, setSaveError] = useState<string | null>(null);
+
+    const testStatusRef = useRef(testStatus);
+    useEffect(() => {
+        testStatusRef.current = testStatus;
+    }, [testStatus]);
 
     useEffect(() => {
         setConfig(initialConfig);
     }, [initialConfig]);
 
     if (!config) {
-        return <div>Loading...</div>;
+        return <div className="p-8 text-center">Loading settings...</div>;
     }
 
     const handleSave = async (updates: Partial<SystemConfig>) => {
         setIsSaving(true);
-        await onConfigUpdate(updates);
+        setSaveError(null);
+        const ok = await onConfigUpdate(updates);
+        if (!ok) {
+            setSaveError('Failed to save settings. Please try again.');
+        }
         setIsSaving(false);
     };
 
@@ -61,9 +71,9 @@ export default function Settings({ config: initialConfig, onConfigUpdate, token 
             setTestMessage('Network error');
         }
 
-        // Reset status after 3 seconds
+        // Reset status after 5 seconds
         setTimeout(() => {
-            if (testStatus !== 'testing') {
+            if (testStatusRef.current !== 'testing') {
                 setTestStatus('idle');
                 setTestMessage('');
             }
@@ -83,6 +93,12 @@ export default function Settings({ config: initialConfig, onConfigUpdate, token 
                     {config.planName || (isPremium ? 'Pro' : 'Standard')}
                 </div>
             </div>
+
+            {saveError && (
+                <div className="alert alert-error mt-4">
+                    <p>{saveError}</p>
+                </div>
+            )}
 
             <div className="grid grid-2 mt-4">
                 {/* Encoding Settings */}
@@ -144,10 +160,10 @@ export default function Settings({ config: initialConfig, onConfigUpdate, token 
                                     onChange={(e) => setConfig({ ...config, crf: parseInt(e.target.value) })}
                                     onBlur={(e) => handleSave({ crf: parseInt(e.target.value) })}
                                     disabled={isSaving}
-                                    min="18"
-                                    max="28"
+                                    min="0"
+                                    max="51"
                                 />
-                                <span className="text-xs text-secondary mt-1">Lower = better quality</span>
+                                <span className="text-xs text-secondary mt-1">Lower = better quality (0-51)</span>
                             </div>
                         </div>
                     </div>
@@ -258,14 +274,14 @@ export default function Settings({ config: initialConfig, onConfigUpdate, token 
 
                                 <div className="mt-4 flex items-center gap-3">
                                     <button
-                                        className={`btn ${testStatus === 'success' ? 'btn-success' : testStatus === 'error' ? 'btn-error' : 'btn-secondary'}`}
+                                        className={`btn ${testStatus === 'success' ? 'btn-success' : testStatus === 'error' ? 'btn-error' : testStatus === 'testing' ? 'btn-secondary' : 'btn-secondary'}`}
                                         onClick={handleTestConnection}
                                         disabled={testStatus === 'testing' || !config.aiProvider}
                                     >
                                         {testStatus === 'testing' ? 'Testing...' : 'Test Connection'}
                                     </button>
                                     {testMessage && (
-                                        <span className={`text-sm ${testStatus === 'success' ? 'text-green-400' : 'text-red-400'}`}>
+                                        <span className={`text-sm ${testStatus === 'success' ? 'text-green-400' : testStatus === 'error' ? 'text-red-400' : 'text-secondary'}`}>
                                             {testMessage}
                                         </span>
                                     )}
@@ -273,13 +289,61 @@ export default function Settings({ config: initialConfig, onConfigUpdate, token 
                             </>
                         )}
                     </div>
-                </div>
-            </div>
 
-            <div className="mt-4 p-4 bg-tertiary rounded-lg border border-border">
-                <p className="text-sm text-secondary">
-                    <strong>Pro Tip:</strong> Using a local model with <strong>Ollama</strong> or a fast cloud model like <strong>Gemini Flash</strong> is recommended for real-time media analysis.
-                </p>
+                    <div className="divider mt-8 mb-4"></div>
+
+                    <div className="grid grid-2 gap-4">
+                        {/* Safety & Verification */}
+                        <div className="setting-item">
+                            <label className="setting-label flex justify-between">
+                                Delete Original File
+                                <span className="text-red-400 text-xs uppercase font-bold">Caution</span>
+                            </label>
+                            <label className="flex items-center gap-2 cursor-pointer mt-2">
+                                <input
+                                    type="checkbox"
+                                    className="checkbox checkbox-error"
+                                    checked={config.deleteSource || false}
+                                    onChange={(e) => handleSave({ deleteSource: e.target.checked })}
+                                    disabled={isSaving}
+                                />
+                                <span className="text-sm">Permanently delete source file after successful conversion</span>
+                            </label>
+                        </div>
+
+                        <div className="setting-item">
+                            <label className="setting-label flex justify-between">
+                                AI Smart Verification
+                                {!isPremium && <span className="pro-tag">PRO</span>}
+                            </label>
+                            <label className="flex items-center gap-2 cursor-pointer mt-2">
+                                <input
+                                    type="checkbox"
+                                    className="checkbox checkbox-success"
+                                    checked={config.verifyOutput || false}
+                                    onChange={(e) => handleSave({ verifyOutput: e.target.checked })}
+                                    disabled={!isPremium || isSaving}
+                                />
+                                <span className="text-sm">
+                                    {isPremium
+                                        ? "Verify video integrity with AI before completing (Required for Safe Delete)"
+                                        : "Upgrade to Pro to enable AI integrity checks"}
+                                </span>
+                            </label>
+                            {config.deleteSource && !config.verifyOutput && (
+                                <p className="text-xs text-orange-400 mt-1">
+                                    ⚠️ Warning: Deleting files without AI verification is risky.
+                                </p>
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="mt-8 p-4 bg-tertiary rounded-lg border border-border">
+                        <p className="text-sm text-secondary">
+                            <strong>Pro Tip:</strong> Using a local model with <strong>Ollama</strong> or a fast cloud model like <strong>Gemini Flash</strong> is recommended for real-time media analysis.
+                        </p>
+                    </div>
+                </div>
             </div>
         </div>
     );

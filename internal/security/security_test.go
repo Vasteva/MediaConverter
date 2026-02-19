@@ -59,6 +59,12 @@ func TestValidatePath(t *testing.T) {
 			allowedBases: []string{allowedBase, filepath.Join(tmpDir, "other")},
 			wantErr:      false,
 		},
+		{
+			name:         "adjacent directory bypass",
+			path:         allowedBase + "_extra/test.txt",
+			allowedBases: []string{allowedBase},
+			wantErr:      true,
+		},
 	}
 
 	for _, tt := range tests {

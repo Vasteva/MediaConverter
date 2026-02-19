@@ -45,7 +45,8 @@ type TranscodeOptions struct {
 
 // FFmpegWrapper handles FFmpeg command execution
 type FFmpegWrapper struct {
-	ffmpegPath string
+	ffmpegPath  string
+	ffprobePath string
 }
 
 // NewFFmpegWrapper creates a new FFmpeg wrapper
@@ -55,7 +56,8 @@ func NewFFmpegWrapper() (*FFmpegWrapper, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg not found in PATH: %w", err)
 	}
-	return &FFmpegWrapper{ffmpegPath: path}, nil
+	ffprobePath, _ := exec.LookPath("ffprobe")
+	return &FFmpegWrapper{ffmpegPath: path, ffprobePath: ffprobePath}, nil
 }
 
 // Transcode executes FFmpeg transcoding with the given options
@@ -70,6 +72,25 @@ func (f *FFmpegWrapper) Transcode(ctx context.Context, opts TranscodeOptions) er
 		return fmt.Errorf("ffmpeg failed: %w\nOutput: %s", err, string(output))
 	}
 
+	return nil
+}
+
+// ExtractFrame extracts a single frame at a specific timestamp
+func (f *FFmpegWrapper) ExtractFrame(ctx context.Context, inputPath string, timestamp float64, outputPath string) error {
+	args := []string{
+		"-ss", fmt.Sprintf("%.2f", timestamp),
+		"-i", inputPath,
+		"-frames:v", "1",
+		"-q:v", "2", // High quality JPEG
+		"-y",
+		outputPath,
+	}
+
+	cmd := exec.CommandContext(ctx, f.ffmpegPath, args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("frame extraction failed: %w\nOutput: %s", err, string(output))
+	}
 	return nil
 }
 
@@ -145,15 +166,13 @@ func (f *FFmpegWrapper) getUpscaleFilter(opts TranscodeOptions) string {
 // getVideoEncoderArgs returns video encoder arguments based on GPU vendor
 func (f *FFmpegWrapper) getVideoEncoderArgs(opts TranscodeOptions) []string {
 	args := []string{}
-
-	// Video Filter (for scaling/upscaling)
 	upscaleFilter := f.getUpscaleFilter(opts)
-	if upscaleFilter != "" {
-		args = append(args, "-vf", upscaleFilter)
-	}
 
 	switch opts.GPUVendor {
 	case GPUVendorNvidia:
+		if upscaleFilter != "" {
+			args = append(args, "-vf", upscaleFilter)
+		}
 		args = append(args,
 			"-c:v", "hevc_nvenc",
 			"-preset", f.mapPresetToNvenc(opts.Preset),
@@ -163,19 +182,20 @@ func (f *FFmpegWrapper) getVideoEncoderArgs(opts TranscodeOptions) []string {
 			"-profile:v", "main10",
 			"-tier", "high",
 		)
-	case GPUVendorIntel:
+	case GPUVendorIntel, GPUVendorAMD:
+		filter := "hwupload"
+		if upscaleFilter != "" {
+			filter = upscaleFilter + ",hwupload"
+		}
 		args = append(args,
 			"-c:v", "hevc_vaapi",
 			"-qp", fmt.Sprintf("%d", opts.CRF),
-			"-vf", "hwupload",
-		)
-	case GPUVendorAMD:
-		args = append(args,
-			"-c:v", "hevc_vaapi",
-			"-qp", fmt.Sprintf("%d", opts.CRF),
-			"-vf", "hwupload",
+			"-vf", filter,
 		)
 	default: // CPU
+		if upscaleFilter != "" {
+			args = append(args, "-vf", upscaleFilter)
+		}
 		args = append(args,
 			"-c:v", "libx265",
 			"-preset", string(opts.Preset),
@@ -220,9 +240,8 @@ func (f *FFmpegWrapper) getAudioEncoderArgs(codec string) []string {
 
 // GetMediaInfo retrieves basic media information using ffprobe
 func (f *FFmpegWrapper) GetMediaInfo(ctx context.Context, path string) (*MediaInfo, error) {
-	ffprobePath, err := exec.LookPath("ffprobe")
-	if err != nil {
-		return nil, fmt.Errorf("ffprobe not found: %w", err)
+	if f.ffprobePath == "" {
+		return nil, fmt.Errorf("ffprobe not found")
 	}
 
 	args := []string{
@@ -233,7 +252,7 @@ func (f *FFmpegWrapper) GetMediaInfo(ctx context.Context, path string) (*MediaIn
 		path,
 	}
 
-	cmd := exec.CommandContext(ctx, ffprobePath, args...)
+	cmd := exec.CommandContext(ctx, f.ffprobePath, args...)
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("ffprobe failed: %w", err)

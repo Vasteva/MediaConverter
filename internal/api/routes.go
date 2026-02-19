@@ -29,7 +29,7 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 	}
 
 	api := app.Group("/api", AuthMiddleware(cfg))
-	RegisterFSRoutes(api)
+	RegisterFSRoutes(api, cfg)
 
 	// Setup Wizard
 	setup := api.Group("/setup")
@@ -91,8 +91,17 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		return c.JSON(fiber.Map{"success": true})
 	})
 
+	// Initialize rate limiter for login
+	loginLimiter := NewRateLimiter()
+
 	// Login
 	api.Post("/login", func(c *fiber.Ctx) error {
+		ip := c.IP()
+		if !loginLimiter.Check(ip) {
+			log.Printf("[Auth] Rate limit exceeded for IP: %s", ip)
+			return c.Status(429).JSON(fiber.Map{"error": "Too many login attempts. Please try again in a minute."})
+		}
+
 		var req struct {
 			Password string `json:"password"`
 		}
@@ -120,6 +129,9 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 
 	// Dashboard Stats
 	api.Get("/dashboard/stats", func(c *fiber.Ctx) error {
+		if fs == nil {
+			return c.JSON(system.DashboardStats{})
+		}
 		processed := fs.GetProcessedFiles()
 		stats := system.DashboardStats{}
 
@@ -167,10 +179,16 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 
 	// Jobs
 	api.Get("/jobs", func(c *fiber.Ctx) error {
+		if jm == nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Job manager not initialized"})
+		}
 		return c.JSON(jm.GetAllJobs())
 	})
 
 	api.Post("/jobs", func(c *fiber.Ctx) error {
+		if jm == nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Job manager not initialized"})
+		}
 		var req struct {
 			Type            jobs.JobType `json:"type"`
 			SourcePath      string       `json:"sourcePath"`
@@ -223,6 +241,9 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 	})
 
 	api.Get("/jobs/:id", func(c *fiber.Ctx) error {
+		if jm == nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Job manager not initialized"})
+		}
 		job := jm.GetJob(c.Params("id"))
 		if job == nil {
 			return c.Status(404).JSON(fiber.Map{"error": "Job not found"})
@@ -231,6 +252,9 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 	})
 
 	api.Delete("/jobs/:id", func(c *fiber.Ctx) error {
+		if jm == nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Job manager not initialized"})
+		}
 		if jm.CancelJob(c.Params("id")) {
 			return c.JSON(fiber.Map{"success": true})
 		}
@@ -304,7 +328,9 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			Model:    cfg.AIModel,
 		})
 		if err == nil {
-			jm.UpdateAIProvider(newAI)
+			if jm != nil {
+				jm.UpdateAIProvider(newAI)
+			}
 		} else {
 			log.Printf("Error updating AI provider: %v", err)
 		}
@@ -447,6 +473,13 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 
 		if !cfg.IsPremium {
 			return c.Status(403).JSON(fiber.Map{"error": "AI Search is a premium feature"})
+		}
+
+		if jm == nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Job manager not initialized"})
+		}
+		if fs == nil {
+			return c.Status(503).JSON(fiber.Map{"error": "Scanner not initialized"})
 		}
 
 		aiProv := jm.GetAI()

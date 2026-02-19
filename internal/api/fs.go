@@ -8,6 +8,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/Vasteva/MediaConverter/internal/config"
+	"github.com/Vasteva/MediaConverter/internal/security"
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -28,11 +30,13 @@ type FileListResponse struct {
 	Error   string      `json:"error,omitempty"`
 }
 
-func RegisterFSRoutes(api fiber.Router) {
-	api.Get("/fs/list", handleListFiles)
+func RegisterFSRoutes(api fiber.Router, cfg *config.Config) {
+	api.Get("/fs/list", func(c *fiber.Ctx) error {
+		return handleListFiles(c, cfg)
+	})
 }
 
-func handleListFiles(c *fiber.Ctx) error {
+func handleListFiles(c *fiber.Ctx, cfg *config.Config) error {
 	reqPath := c.Query("path")
 
 	// Default to root if not specified
@@ -45,9 +49,11 @@ func handleListFiles(c *fiber.Ctx) error {
 
 	log.Printf("[FS] Listing path: %s", absPath)
 
-	// Security: In a real app we might want to restrict this
-	// But since this is a self-hosted media tool, we allow browsing
-	// We could restrict to /mnt/media or similar if strict mode is on
+	// Security: Restrict to SourceDir or DestDir
+	if _, err := security.ValidatePath(absPath, cfg.SourceDir, cfg.DestDir); err != nil {
+		log.Printf("[FS] Access denied for path: %s", absPath)
+		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
+	}
 
 	entries, err := os.ReadDir(absPath)
 	if err != nil {

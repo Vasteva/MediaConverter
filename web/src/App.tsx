@@ -13,7 +13,7 @@ import type { Job, SystemConfig, ScannerConfig, SystemStats, DashboardStats } fr
 function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>('dark');
   const [currentView, setCurrentView] = useState<'dashboard' | 'jobs' | 'scanner' | 'search' | 'settings'>('dashboard');
-  const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
+  const [token, setToken] = useState<string | null>(sessionStorage.getItem('token'));
   const [jobs, setJobs] = useState<Job[]>([]);
   const [config, setConfig] = useState<SystemConfig | null>(null);
   const [scannerConfig, setScannerConfig] = useState<ScannerConfig | null>(null);
@@ -37,7 +37,7 @@ function App() {
   // Helper functions - Define early to avoid hoisting issues
   const handleLogout = useCallback(() => {
     setToken(null);
-    localStorage.removeItem('token');
+    sessionStorage.removeItem('token');
     // Clear data
     setJobs([]);
     setConfig(null);
@@ -48,7 +48,7 @@ function App() {
 
   const handleLogin = useCallback((newToken: string) => {
     setToken(newToken);
-    localStorage.setItem('token', newToken);
+    sessionStorage.setItem('token', newToken);
     setIsLoading(true);
   }, []);
 

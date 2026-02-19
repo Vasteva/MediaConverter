@@ -3,10 +3,12 @@ package ai
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -88,4 +90,95 @@ func (p *GeminiProvider) Analyze(ctx context.Context, prompt string) (string, er
 }
 func (p *GeminiProvider) Transcribe(ctx context.Context, audioPath string) (string, error) {
 	return "", fmt.Errorf("transcription for Gemini is coming soon (requires File API upload)")
+}
+
+func (p *GeminiProvider) VerifyMedia(ctx context.Context, originalPaths, convertedPaths []string) (bool, error) {
+	if len(originalPaths) != len(convertedPaths) {
+		return false, fmt.Errorf("mismatched number of images for verification")
+	}
+
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", p.Model, p.APIKey)
+
+	// Build the multipart content for Gemini
+	// We will send pairs of images: "Original 1", [Image], "Converted 1", [Image], ...
+	parts := []interface{}{
+		map[string]interface{}{"text": "I will provide 5 pairs of images. The first of each pair is the original frame, the second is the converted frame. Verify that the visual content is preserved and no significant corruption (green blocks, heavy static, distortion) has occurred. Reply with 'TRUE' if all frames look visually valid and similar. Reply 'FALSE' if there is clear corruption."},
+	}
+
+	for i := 0; i < len(originalPaths); i++ {
+		// Read and encode original
+		origBytes, err := os.ReadFile(originalPaths[i])
+		if err != nil {
+			return false, err
+		}
+		parts = append(parts, map[string]interface{}{
+			"inline_data": map[string]string{
+				"mime_type": "image/jpeg",
+				"data":      base64.StdEncoding.EncodeToString(origBytes),
+			},
+		})
+
+		// Read and encode converted
+		convBytes, err := os.ReadFile(convertedPaths[i])
+		if err != nil {
+			return false, err
+		}
+		parts = append(parts, map[string]interface{}{
+			"inline_data": map[string]string{
+				"mime_type": "image/jpeg",
+				"data":      base64.StdEncoding.EncodeToString(convBytes),
+			},
+		})
+	}
+
+	payload := map[string]interface{}{
+		"contents": []interface{}{
+			map[string]interface{}{
+				"parts": parts,
+			},
+		},
+	}
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return false, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("gemini api error (%d): %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					Text string `json:"text"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		return false, err
+	}
+
+	if len(result.Candidates) > 0 && len(result.Candidates[0].Content.Parts) > 0 {
+		text := strings.TrimSpace(strings.ToUpper(result.Candidates[0].Content.Parts[0].Text))
+		return strings.Contains(text, "TRUE"), nil
+	}
+
+	return false, fmt.Errorf("no response from gemini")
 }

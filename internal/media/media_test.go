@@ -30,7 +30,7 @@ func TestFFmpegWrapper_BuildArgs(t *testing.T) {
 			expected: []string{"-hwaccel", "cuda", "hevc_nvenc", "-preset", "p5"},
 		},
 		{
-			name: "Intel QSV",
+			name: "Intel VAAPI",
 			opts: TranscodeOptions{
 				InputPath:  "/input/test.mkv",
 				OutputPath: "/output/test.mkv",
@@ -39,7 +39,7 @@ func TestFFmpegWrapper_BuildArgs(t *testing.T) {
 				CRF:        23,
 				AudioCodec: "copy",
 			},
-			expected: []string{"-hwaccel", "qsv", "hevc_qsv"},
+			expected: []string{"-hwaccel", "vaapi", "hevc_vaapi"},
 		},
 		{
 			name: "AMD VAAPI",

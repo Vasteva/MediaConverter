@@ -38,9 +38,10 @@ const (
 )
 
 type Job struct {
-	ID              string    `json:"id"`
-	Type            JobType   `json:"type"`
-	SourcePath      string    `json:"sourcePath"`
+	mu              sync.RWMutex `json:"-"`
+	ID              string       `json:"id"`
+	Type            JobType      `json:"type"`
+	SourcePath      string       `json:"sourcePath"`
 	DestinationPath string    `json:"destinationPath"`
 	Status          Status    `json:"status"`
 	StatusDetail    string    `json:"statusDetail,omitempty"`
@@ -59,6 +60,9 @@ type Job struct {
 	OutputSize      int64     `json:"outputSize"`
 	AICleaned       bool      `json:"aiCleaned"`
 	AISubtitles     bool      `json:"aiSubtitles"`
+	VerifyOutput    bool      `json:"verifyOutput"` // Premium feature
+	Verified        bool      `json:"verified"`
+	DeleteSource    bool      `json:"deleteSource"`
 
 	// Internal
 	ctx    context.Context
@@ -185,7 +189,15 @@ func (m *Manager) UpdateAIProvider(provider ai.Provider) {
 	log.Printf("Job manager AI provider updated")
 }
 
+func (m *Manager) updateJob(job *Job, fn func(*Job)) {
+	job.mu.Lock()
+	fn(job)
+	job.mu.Unlock()
+	m.Save()
+}
+
 func (m *Manager) processJob(job *Job) {
+	job.mu.Lock()
 	job.ctx, job.cancel = context.WithCancel(context.Background())
 	job.Status = StatusProcessing
 	job.StartedAt = time.Now()
@@ -194,18 +206,28 @@ func (m *Manager) processJob(job *Job) {
 	if info, err := os.Stat(job.SourcePath); err == nil {
 		job.InputSize = info.Size()
 	}
+	job.mu.Unlock()
+	m.Save()
 
 	// Premium Feature: AI Metadata Cleanup
 	if m.config.IsPremium && m.ai != nil && job.Type == JobTypeOptimize {
 		cleaner := meta.NewCleaner(m.ai)
-		filename := filepath.Base(job.SourcePath)
-		if cleanTitle, err := cleaner.CleanFilename(job.ctx, filename); err == nil {
+		job.mu.RLock()
+		sourcePath := job.SourcePath
+		destPath := job.DestinationPath
+		ctx := job.ctx
+		job.mu.RUnlock()
+
+		filename := filepath.Base(sourcePath)
+		if cleanTitle, err := cleaner.CleanFilename(ctx, filename); err == nil {
 			log.Printf("[Premium] AI cleaned filename: %s -> %s", filename, cleanTitle)
+			job.mu.Lock()
 			job.AICleaned = true
 			// Adjust destination path if needed
-			ext := filepath.Ext(job.DestinationPath)
-			dir := filepath.Dir(job.DestinationPath)
+			ext := filepath.Ext(destPath)
+			dir := filepath.Dir(destPath)
 			job.DestinationPath = filepath.Join(dir, cleanTitle+ext)
+			job.mu.Unlock()
 		}
 	}
 
@@ -221,10 +243,12 @@ func (m *Manager) processJob(job *Job) {
 
 		if strings.HasSuffix(lowerPath, ".iso") || strings.HasSuffix(lowerPath, ".img") || strings.HasSuffix(lowerPath, ".mdf") {
 			log.Printf("[Job %s] Detected disc image input. Starting auto-extraction...", job.ID)
-			job.StatusDetail = "Extracting"
-			m.Save()
+			m.updateJob(job, func(j *Job) {
+				j.StatusDetail = "Extracting"
+			})
 
 			// Ensure destination has a video extension, not a disc image extension
+			job.mu.Lock()
 			destExt := strings.ToLower(filepath.Ext(job.DestinationPath))
 			if destExt == ".iso" || destExt == ".img" || destExt == ".mdf" {
 				dir := filepath.Dir(job.DestinationPath)
@@ -232,6 +256,7 @@ func (m *Manager) processJob(job *Job) {
 				job.DestinationPath = filepath.Join(dir, base+".mkv")
 				log.Printf("[Job %s] Corrected destination extension: %s", job.ID, job.DestinationPath)
 			}
+			job.mu.Unlock()
 
 			if m.makemkv == nil {
 				err = fmt.Errorf("makemkv not installed")
@@ -267,8 +292,9 @@ func (m *Manager) processJob(job *Job) {
 			}
 
 			err = m.makemkv.ExtractWithProgress(job.ctx, opts, func(p media.TranscodeProgress) {
-				job.Progress = p.Percentage / 2 // First 50%
-				m.Save()
+				m.updateJob(job, func(j *Job) {
+					j.Progress = p.Percentage / 2 // First 50%
+				})
 			})
 
 			if err != nil {
@@ -283,26 +309,26 @@ func (m *Manager) processJob(job *Job) {
 				break
 			}
 
-			// Update source path for the optimization step
-			originalSource := job.SourcePath
-			job.SourcePath = files[0]
-			log.Printf("[Job %s] Extraction complete. Proceeding to optimize: %s", job.ID, job.SourcePath)
+			// Proceed to optimize using the extracted file
+			extractedSource := files[0]
+			log.Printf("[Job %s] Extraction complete. Proceeding to optimize: %s", job.ID, extractedSource)
 
-			job.StatusDetail = "Optimizing"
-			m.Save()
+			m.updateJob(job, func(j *Job) {
+				j.StatusDetail = "Optimizing"
+			})
 
-			// Now proceed to standard optimization
-			err = m.runOptimization(job)
+			// Pass the extracted source explicitly
+			err = m.runOptimizationFromPath(job, extractedSource)
 
 			// Cleanup
 			if err == nil {
 				os.RemoveAll(extractDir)
-				job.SourcePath = originalSource
 			}
 		} else {
 			log.Printf("[Job %s] Path does not require extraction. Proceeding directly.", job.ID)
-			job.StatusDetail = "Optimizing"
-			m.Save()
+			m.updateJob(job, func(j *Job) {
+				j.StatusDetail = "Optimizing"
+			})
 			err = m.runOptimization(job)
 		}
 	case JobTypeTest:
@@ -310,18 +336,22 @@ func (m *Manager) processJob(job *Job) {
 	}
 
 	if err != nil {
-		job.Status = StatusFailed
-		job.Error = err.Error()
+		m.updateJob(job, func(j *Job) {
+			j.Status = StatusFailed
+			j.Error = err.Error()
+			j.CompletedAt = time.Now()
+		})
 	} else {
-		job.Status = StatusCompleted
-		job.Progress = 100
-
-		// Track output size
-		if info, err := os.Stat(job.DestinationPath); err == nil {
-			job.OutputSize = info.Size()
-		}
+		m.updateJob(job, func(j *Job) {
+			j.Status = StatusCompleted
+			j.Progress = 100
+			j.CompletedAt = time.Now()
+			// Track output size
+			if info, err := os.Stat(j.DestinationPath); err == nil {
+				j.OutputSize = info.Size()
+			}
+		})
 	}
-	job.CompletedAt = time.Now()
 
 	// Persist job state to disk
 	m.Save()
@@ -365,7 +395,9 @@ func (m *Manager) runExtraction(job *Job) error {
 	}
 
 	err = m.makemkv.ExtractWithProgress(job.ctx, opts, func(p media.TranscodeProgress) {
-		job.Progress = p.Percentage
+		m.updateJob(job, func(j *Job) {
+			j.Progress = p.Percentage
+		})
 	})
 	if err != nil {
 		return fmt.Errorf("extraction failed: %v", err)
@@ -375,15 +407,15 @@ func (m *Manager) runExtraction(job *Job) error {
 	return nil
 }
 
-func (m *Manager) runOptimization(job *Job) error {
+func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 	if m.ffmpeg == nil {
 		return fmt.Errorf("ffmpeg wrapper not initialized")
 	}
 
-	log.Printf("[Job %s] Starting optimization: %s", job.ID, job.SourcePath)
+	log.Printf("[Job %s] Starting optimization: %s", job.ID, sourcePath)
 
 	// 1. Get media info for duration
-	info, err := m.ffmpeg.GetMediaInfo(job.ctx, job.SourcePath)
+	info, err := m.ffmpeg.GetMediaInfo(job.ctx, sourcePath)
 	if err != nil {
 		log.Printf("[Job %s] Error getting media info: %v", job.ID, err)
 		return fmt.Errorf("failed to get media info: %w", err)
@@ -404,23 +436,34 @@ func (m *Manager) runOptimization(job *Job) error {
 		}
 	}
 
+	job.mu.RLock()
+	destPath := job.DestinationPath
+	upscale := job.Upscale
+	resolution := job.Resolution
+	createSubtitles := job.CreateSubtitles
+	verifyOutput := job.VerifyOutput
+	deleteSource := job.DeleteSource
+	job.mu.RUnlock()
+
 	opts := media.TranscodeOptions{
-		InputPath:     job.SourcePath,
-		OutputPath:    job.DestinationPath,
+		InputPath:     sourcePath,
+		OutputPath:    destPath,
 		GPUVendor:     media.GPUVendor(m.config.GPUVendor),
 		Preset:        media.QualityPreset(m.config.QualityPreset),
 		CRF:           crf,
 		TotalDuration: info.Duration,
-		Upscale:       job.Upscale,
-		Resolution:    job.Resolution,
+		Upscale:       upscale,
+		Resolution:    resolution,
 	}
 
 	log.Printf("[Job %s] Starting ffmpeg transcoding to: %s", job.ID, opts.OutputPath)
 
 	err = m.ffmpeg.TranscodeWithProgress(job.ctx, opts, func(p media.TranscodeProgress) {
-		job.Progress = p.Percentage
-		job.FPS = p.FPS
-		job.ETA = p.ETA
+		m.updateJob(job, func(j *Job) {
+			j.Progress = p.Percentage
+			j.FPS = p.FPS
+			j.ETA = p.ETA
+		})
 	})
 	if err != nil {
 		log.Printf("[Job %s] FFmpeg failed: %v", job.ID, err)
@@ -430,36 +473,137 @@ func (m *Manager) runOptimization(job *Job) error {
 	log.Printf("[Job %s] Transcoding completed successfully", job.ID)
 
 	// 3. Premium Feature: AI Whisper Subtitles
-	if m.config.IsPremium && job.CreateSubtitles && m.ai != nil {
+	if m.config.IsPremium && createSubtitles && m.ai != nil {
 		log.Printf("[Premium] Running Whisper subtitle generation...")
 		generator := whisper.NewGenerator(m.ai)
-		if srtPath, sErr := generator.GenerateSRT(job.ctx, job.DestinationPath); sErr != nil {
+		if srtPath, sErr := generator.GenerateSRT(job.ctx, destPath); sErr != nil {
 			log.Printf("Warning: Whisper subtitle generation failed: %v", sErr)
 			// Don't fail the whole job just because subtitles failed
 		} else {
 			log.Printf("[Premium] Subtitles generated: %s", srtPath)
-			job.AISubtitles = true
+			m.updateJob(job, func(j *Job) {
+				j.AISubtitles = true
+			})
+		}
+	}
+
+	// 4. Premium Feature: AI Video Verification (Safe Delete)
+	verified := false
+	if m.config.IsPremium && verifyOutput && m.ai != nil {
+		log.Printf("[Premium] Verifying video integrity with AI...")
+		m.updateJob(job, func(j *Job) {
+			j.StatusDetail = "Verifying"
+		})
+
+		if vOk, vErr := m.runVerificationFromPaths(job, sourcePath, destPath); vErr != nil {
+			log.Printf("Warning: AI Verification failed to execute: %v", vErr)
+			m.updateJob(job, func(j *Job) {
+				j.Error = fmt.Sprintf("Verification error: %v", vErr)
+			})
+		} else if !vOk {
+			log.Printf("[Premium] FAILURE: AI detected corruption in output video.")
+			m.updateJob(job, func(j *Job) {
+				j.Error = "AI Verification Failed: Corruption detected"
+			})
+			// We do NOT set verified=true
+		} else {
+			log.Printf("[Premium] SUCCESS: Video integrity verified by AI.")
+			verified = true
+			m.updateJob(job, func(j *Job) {
+				j.Verified = true
+			})
+		}
+	} else if !verifyOutput {
+		// If verification is disabled, we consider it "safe" to delete if the user explicitly asked for it
+		// (Standard behavior for non-verified delete)
+		verified = true
+	}
+
+	// 5. Delete Source (Safe Delete)
+	if deleteSource {
+		if verified {
+			log.Printf("[Job %s] Deleting source file: %s", job.ID, sourcePath)
+			if err := os.Remove(sourcePath); err != nil {
+				log.Printf("Warning: Failed to delete source file: %v", err)
+			}
+		} else {
+			log.Printf("[Job %s] SKIPPING deletion. Verification failed or not run.", job.ID)
 		}
 	}
 
 	return nil
 }
 
+func (m *Manager) runOptimization(job *Job) error {
+	return m.runOptimizationFromPath(job, job.SourcePath)
+}
+
+func (m *Manager) runVerificationFromPaths(job *Job, srcPath, destPath string) (bool, error) {
+	// Extract 5 frames from source and destination
+	// 0%, 25%, 50%, 75%, 90% (avoid 100% as it might be black frame)
+	timestamps := []float64{0.0, 0.25, 0.50, 0.75, 0.90}
+
+	// Get durations
+	// Get durations
+	srcInfo, err := m.ffmpeg.GetMediaInfo(job.ctx, srcPath)
+	if err != nil {
+		return false, err
+	}
+	destInfo, err := m.ffmpeg.GetMediaInfo(job.ctx, destPath)
+	if err != nil {
+		return false, err
+	}
+
+	tempDir := filepath.Join(os.TempDir(), "vastiva_verify_"+job.ID)
+	if err := os.MkdirAll(tempDir, 0755); err != nil {
+		return false, err
+	}
+	defer os.RemoveAll(tempDir)
+
+	var srcFrames, destFrames []string
+
+	for i, pct := range timestamps {
+		srcTime := srcInfo.Duration * pct
+		destTime := destInfo.Duration * pct
+
+		srcFrame := filepath.Join(tempDir, fmt.Sprintf("src_%d.jpg", i))
+		destFrame := filepath.Join(tempDir, fmt.Sprintf("dest_%d.jpg", i))
+
+		// Extract Source
+		if err := m.ffmpeg.ExtractFrame(job.ctx, srcPath, srcTime, srcFrame); err != nil {
+			return false, fmt.Errorf("failed to extract source frame %d: %v", i, err)
+		}
+		// Extract Dest
+		if err := m.ffmpeg.ExtractFrame(job.ctx, destPath, destTime, destFrame); err != nil {
+			return false, fmt.Errorf("failed to extract dest frame %d: %v", i, err)
+		}
+
+		srcFrames = append(srcFrames, srcFrame)
+		destFrames = append(destFrames, destFrame)
+	}
+
+	return m.ai.VerifyMedia(job.ctx, srcFrames, destFrames)
+}
+
 func (m *Manager) runTest(job *Job) error {
 	duration := 10 * time.Second
 	start := time.Now()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-job.ctx.Done():
 			return job.ctx.Err()
-		case <-time.After(500 * time.Millisecond):
+		case <-ticker.C:
 			elapsed := time.Since(start)
 			if elapsed >= duration {
 				return nil
 			}
-			job.Progress = int((elapsed.Seconds() / duration.Seconds()) * 100)
-			job.FPS = 24.0
-			job.ETA = formatDuration(duration - elapsed)
+			m.updateJob(job, func(j *Job) {
+				j.Progress = int((elapsed.Seconds() / duration.Seconds()) * 100)
+				j.FPS = 24.0
+				j.ETA = formatDuration(duration - elapsed)
+			})
 		}
 	}
 }

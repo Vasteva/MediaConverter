@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Vasteva/MediaConverter/internal/jobs"
@@ -102,6 +103,10 @@ type Scanner struct {
 	status   ScanStatus
 	statusMu sync.RWMutex
 
+	isScanning atomic.Bool
+	pendingMu  sync.Mutex
+	pending    map[string]time.Time
+
 	stopCh chan struct{}
 	wg     sync.WaitGroup
 	ctx    context.Context
@@ -149,6 +154,7 @@ func NewScanner(config *ScannerConfig, jobManager *jobs.Manager) (*Scanner, erro
 		jobManager:  jobManager,
 		processedDB: processedDB,
 		stopCh:      make(chan struct{}),
+		pending:     make(map[string]time.Time),
 		ctx:         ctx,
 		cancel:      cancel,
 	}
@@ -332,11 +338,11 @@ func (s *Scanner) UpdateConfig(newCfg *ScannerConfig) error {
 
 // ScanAll scans all configured directories
 func (s *Scanner) ScanAll() error {
-	s.statusMu.Lock()
-	if s.status.IsScanning {
-		s.statusMu.Unlock()
+	if s.isScanning.Swap(true) {
 		return fmt.Errorf("scan already in progress")
 	}
+
+	s.statusMu.Lock()
 	s.status.IsScanning = true
 	s.status.FilesScanned = 0
 	s.status.CurrentPath = "Initializing..."
@@ -351,6 +357,7 @@ func (s *Scanner) ScanAll() error {
 		s.status.Duration = duration.String()
 		s.status.CurrentPath = ""
 		s.statusMu.Unlock()
+		s.isScanning.Store(false)
 	}()
 
 	log.Println("[Scanner] Starting full scan of all directories")
@@ -653,6 +660,14 @@ func (s *Scanner) handleNewFile(path string) {
 	// Find matching watch directory
 	for _, watchDir := range s.config.WatchDirectories {
 		if s.isInDirectory(path, watchDir.Path) && s.matchesPatterns(path, watchDir) {
+			s.pendingMu.Lock()
+			if _, exists := s.pending[path]; exists {
+				s.pendingMu.Unlock()
+				return
+			}
+			s.pending[path] = time.Now()
+			s.pendingMu.Unlock()
+
 			// Wait for file age requirement if configured
 			if watchDir.MinFileAgeMinutes > 0 {
 				go s.delayedProcess(path, watchDir)
@@ -660,6 +675,9 @@ func (s *Scanner) handleNewFile(path string) {
 				if s.shouldProcessFile(path, watchDir) {
 					s.createJobForFile(path)
 				}
+				s.pendingMu.Lock()
+				delete(s.pending, path)
+				s.pendingMu.Unlock()
 			}
 			break
 		}
@@ -671,14 +689,21 @@ func (s *Scanner) delayedProcess(path string, watchDir WatchDirectory) {
 	delay := time.Duration(watchDir.MinFileAgeMinutes) * time.Minute
 	log.Printf("[Scanner] Delaying processing of %s for %v", path, delay)
 
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
 	select {
-	case <-time.After(delay):
+	case <-timer.C:
 		if s.shouldProcessFile(path, watchDir) {
 			s.createJobForFile(path)
 		}
 	case <-s.stopCh:
-		return
+		// Exit
 	}
+
+	s.pendingMu.Lock()
+	delete(s.pending, path)
+	s.pendingMu.Unlock()
 }
 
 // periodicScan runs periodic scans
@@ -764,14 +789,17 @@ func (db *ProcessedDB) Load() error {
 // Save writes the processed files database to disk
 func (db *ProcessedDB) Save() error {
 	db.mu.RLock()
-	defer db.mu.RUnlock()
-
 	data, err := json.Marshal(db.processed)
+	db.mu.RUnlock()
 	if err != nil {
 		return err
 	}
 
-	return os.WriteFile(db.filePath, data, 0644)
+	tmp := db.filePath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, db.filePath)
 }
 
 // IsProcessed checks if a file has been processed
@@ -835,14 +863,17 @@ func calculateFileHash(path string) (string, error) {
 
 func (s *Scanner) saveConfig() error {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	data, err := json.MarshalIndent(s.config, "", "  ")
+	s.mu.RUnlock()
 	if err != nil {
 		return err
 	}
 
-	return os.WriteFile(ScannerConfigFile, data, 0644)
+	tmp := ScannerConfigFile + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, ScannerConfigFile)
 }
 
 func (s *Scanner) loadConfig() error {

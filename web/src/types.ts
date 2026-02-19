@@ -32,6 +32,8 @@ export interface SystemConfig {
     isPremium?: boolean;
     isInitialized?: boolean;
     planName?: string;
+    verifyOutput?: boolean;
+    deleteSource?: boolean;
 }
 export interface WatchDirectory {
     path: string;

@@ -38,7 +38,7 @@ func ValidatePath(path string, allowedBases ...string) (string, error) {
 		}
 
 		// Ensure the target is actually inside the base
-		if strings.HasPrefix(absTarget, absBase) {
+		if absTarget == absBase || strings.HasPrefix(absTarget, absBase+string(filepath.Separator)) {
 			return absTarget, nil
 		}
 	}
