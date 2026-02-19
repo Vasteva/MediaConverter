@@ -16,6 +16,10 @@ export interface Job {
     createSubtitles?: boolean;
     upscale?: boolean;
     resolution?: string;
+    inputSize?: number;
+    outputSize?: number;
+    aiCleaned?: boolean;
+    aiSubtitles?: boolean;
 }
 
 export interface SystemConfig {
@@ -83,4 +87,9 @@ export interface ProcessedFile {
     processedAt: string;
     jobId: string;
     jobType: string;
+    inputSize: number;
+    outputSize: number;
+    aiSubtitles: boolean;
+    aiUpscale: boolean;
+    aiCleaned: boolean;
 }

@@ -52,9 +52,11 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
     }, []);
 
     // Update local state if initialConfig changes
-    useEffect(() => {
+    const [prevInitialConfig, setPrevInitialConfig] = useState(initialConfig);
+    if (initialConfig !== prevInitialConfig) {
+        setPrevInitialConfig(initialConfig);
         setConfig(ensureConfig(initialConfig));
-    }, [initialConfig]);
+    }
 
     const handleSave = async () => {
         setIsSaving(true);

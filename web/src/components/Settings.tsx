@@ -66,7 +66,7 @@ export default function Settings({ config: initialConfig, onConfigUpdate, token 
                 setTestStatus('error');
                 setTestMessage(data.error || 'Connection failed');
             }
-        } catch (e) {
+        } catch {
             setTestStatus('error');
             setTestMessage('Network error');
         }

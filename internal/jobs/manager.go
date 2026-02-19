@@ -42,27 +42,27 @@ type Job struct {
 	ID              string       `json:"id"`
 	Type            JobType      `json:"type"`
 	SourcePath      string       `json:"sourcePath"`
-	DestinationPath string    `json:"destinationPath"`
-	Status          Status    `json:"status"`
-	StatusDetail    string    `json:"statusDetail,omitempty"`
-	Progress        int       `json:"progress"`
-	ETA             string    `json:"eta"`
-	FPS             float64   `json:"fps"`
-	Priority        int       `json:"priority"`
-	CreatedAt       time.Time `json:"createdAt"`
-	StartedAt       time.Time `json:"startedAt,omitempty"`
-	CompletedAt     time.Time `json:"completedAt,omitempty"`
-	Error           string    `json:"error,omitempty"`
-	CreateSubtitles bool      `json:"createSubtitles"` // Premium feature
-	Upscale         bool      `json:"upscale"`         // Premium feature
-	Resolution      string    `json:"resolution"`      // Premium feature
-	InputSize       int64     `json:"inputSize"`
-	OutputSize      int64     `json:"outputSize"`
-	AICleaned       bool      `json:"aiCleaned"`
-	AISubtitles     bool      `json:"aiSubtitles"`
-	VerifyOutput    bool      `json:"verifyOutput"` // Premium feature
-	Verified        bool      `json:"verified"`
-	DeleteSource    bool      `json:"deleteSource"`
+	DestinationPath string       `json:"destinationPath"`
+	Status          Status       `json:"status"`
+	StatusDetail    string       `json:"statusDetail,omitempty"`
+	Progress        int          `json:"progress"`
+	ETA             string       `json:"eta"`
+	FPS             float64      `json:"fps"`
+	Priority        int          `json:"priority"`
+	CreatedAt       time.Time    `json:"createdAt"`
+	StartedAt       time.Time    `json:"startedAt,omitempty"`
+	CompletedAt     time.Time    `json:"completedAt,omitempty"`
+	Error           string       `json:"error,omitempty"`
+	CreateSubtitles bool         `json:"createSubtitles"` // Premium feature
+	Upscale         bool         `json:"upscale"`         // Premium feature
+	Resolution      string       `json:"resolution"`      // Premium feature
+	InputSize       int64        `json:"inputSize"`
+	OutputSize      int64        `json:"outputSize"`
+	AICleaned       bool         `json:"aiCleaned"`
+	AISubtitles     bool         `json:"aiSubtitles"`
+	VerifyOutput    bool         `json:"verifyOutput"` // Premium feature
+	Verified        bool         `json:"verified"`
+	DeleteSource    bool         `json:"deleteSource"`
 
 	// Internal
 	ctx    context.Context
@@ -638,10 +638,13 @@ func (m *Manager) Save() error {
 		return fmt.Errorf("failed to marshal jobs: %w", err)
 	}
 
-	if err := os.WriteFile(m.jobsFilePath, data, 0644); err != nil {
+	tmp := m.jobsFilePath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return fmt.Errorf("failed to write jobs file: %w", err)
 	}
-
+	if err := os.Rename(tmp, m.jobsFilePath); err != nil {
+		return fmt.Errorf("failed to rename jobs file: %w", err)
+	}
 	return nil
 }
 

@@ -75,8 +75,8 @@ export default function FileBrowserModal({
                 if (data.path) {
                     // setCurrentPath(data.path); // Doing this might cause loop if not careful, better to trust requested path or just use it for display
                 }
-            } catch (err: any) {
-                setError(err.message);
+            } catch (err) {
+                setError(err instanceof Error ? err.message : 'Unknown error');
             } finally {
                 setLoading(false);
             }
@@ -90,7 +90,7 @@ export default function FileBrowserModal({
         if (isOpen) {
             setCurrentPath(initialPath || '/storage');
         }
-    }, [isOpen]);
+    }, [isOpen, initialPath]);
 
     const handleNavigate = (path: string) => {
         setCurrentPath(path);
