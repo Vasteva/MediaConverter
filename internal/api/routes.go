@@ -242,7 +242,12 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			Upscale:         req.Upscale,
 			Resolution:      req.Resolution,
 			MaxRetries:      req.MaxRetries,
-			CreatedAt:       time.Now(),
+			// Inherit system defaults; the source file won't be deleted unless
+			// the system config explicitly opts in (deleteSource) and, for premium
+			// users, AI verification is enabled (verifyOutput).
+			DeleteSource: cfg.DeleteSource,
+			VerifyOutput: cfg.VerifyOutput,
+			CreatedAt:    time.Now(),
 		}
 		jm.AddJob(job)
 		return c.Status(201).JSON(job)
@@ -284,6 +289,8 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			"licenseKey":    security.MaskKey(cfg.LicenseKey),
 			"isPremium":     cfg.IsPremium,
 			"planName":      license.GetPlanName(cfg.LicenseKey),
+			"verifyOutput":  cfg.VerifyOutput,
+			"deleteSource":  cfg.DeleteSource,
 		})
 	})
 
@@ -296,6 +303,8 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			AIEndpoint    string `json:"aiEndpoint"`
 			AIModel       string `json:"aiModel"`
 			LicenseKey    string `json:"licenseKey"`
+			VerifyOutput  *bool  `json:"verifyOutput"`
+			DeleteSource  *bool  `json:"deleteSource"`
 		}
 		if err := c.BodyParser(&req); err != nil {
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
@@ -329,6 +338,14 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		if req.LicenseKey != "" && !strings.Contains(req.LicenseKey, "....") {
 			cfg.LicenseKey = req.LicenseKey
 			cfg.IsPremium = license.Validate(req.LicenseKey)
+		}
+
+		// Boolean fields — pointer check distinguishes "not sent" from false
+		if req.VerifyOutput != nil {
+			cfg.VerifyOutput = *req.VerifyOutput
+		}
+		if req.DeleteSource != nil {
+			cfg.DeleteSource = *req.DeleteSource
 		}
 
 		// Re-initialize AI provider in manager
