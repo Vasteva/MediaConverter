@@ -74,15 +74,13 @@ The project is in a **solid foundation state** with the core backend functionali
 
 ## 🟢 Low Priority / Enhancements
 
-### 11. ProcessedFile Type Mismatch Frontend/Backend
-- **Location:** `web/src/types.ts` vs `internal/scanner/scanner.go`  
-- **Details:** Frontend `ProcessedFile` type is missing `inputSize`, `outputSize`, `aiSubtitles`, `aiUpscale`, `aiCleaned` fields that exist in backend.
-- **Fix:** Sync TypeScript type definitions with Go structs.
+### 11. ~~ProcessedFile Type Mismatch Frontend/Backend~~ ✅ FIXED
+- **Status:** ✅ Resolved
+- **Details:** `web/src/types.ts` `ProcessedFile` now includes `inputSize`, `outputSize`, `aiSubtitles`, `aiUpscale`, `aiCleaned` — in sync with the Go struct.
 
-### 12. useEffect Dependency Warnings
-- **Location:** `App.tsx:159, 168`
-- **Details:** React hooks have missing dependencies (`fetchJobs`, `fetchStats`, `fetchConfigs`).
-- **Fix:** Add dependencies or use `useCallback` to memoize fetch functions.
+### 12. ~~useEffect Dependency Warnings~~ ✅ FIXED
+- **Status:** ✅ Resolved
+- **Details:** `fetchJobs`, `fetchStats`, and `fetchConfigs` in `App.tsx` are now wrapped in `useCallback`, eliminating the React hook dependency warnings.
 
 ### 13. Roadmap Items (from README.md)
 Per the README, these features are planned but not implemented:

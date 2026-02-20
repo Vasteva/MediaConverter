@@ -13,7 +13,7 @@
 | VAST-002 | Sensitive Information Disclosure (API Keys) | **HIGH** | ✅ Mitigated |
 | VAST-003 | Command Argument Injection (FFmpeg) | **LOW** | ✅ Mitigated |
 | VAST-004 | AI Prompt Injection | **LOW** | ⚠️ Documented |
-| VAST-005 | Missing API Authentication | **MEDIUM** | ⚠️ Documented |
+| VAST-005 | Missing API Authentication | **MEDIUM** | ✅ Fixed |
 
 ---
 
@@ -39,9 +39,8 @@
 - **Future Recommendation**: Implement query sanitization and fixed output formatting (JSON schemas).
 
 ### VAST-005: Missing API Authentication
-- **Problem**: The REST API does not require authentication. Anyone on the network can create jobs or change settings.
-- **Status**: Known limitation. The system currently relies on deployment environment security (e.g., VPN, local network).
-- **Future Recommendation**: Implement JWT or API Key authentication for the internal API.
+- **Problem**: The REST API did not require authentication. Anyone on the network could create jobs or change settings.
+- **Remediation**: Implemented token-based authentication (`internal/api/auth.go`). All `/api/*` routes are protected by `AuthMiddleware`, which validates a HMAC-SHA256 token derived from the admin password. Login is rate-limited to 10 attempts per minute per IP. The `/api/setup/*` and SSE endpoints are exempt while setup is incomplete.
 
 ---
 

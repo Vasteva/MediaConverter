@@ -174,11 +174,11 @@ func TestTranscodeWithProgressCallback(t *testing.T) {
 		AudioCodec: "copy",
 	}
 
-	// This will fail because the file doesn't exist, but that's expected
-	_ = wrapper.TranscodeWithProgress(ctx, opts, callback)
-
-	// We just want to verify the mechanism is in place
-	t.Log("Callback mechanism tested (file not found is expected)")
+	// This will fail because the file doesn't exist, and we expect an error.
+	err = wrapper.TranscodeWithProgress(ctx, opts, callback)
+	if err == nil {
+		t.Error("expected an error for nonexistent input file, got nil")
+	}
 }
 
 // Helper functions

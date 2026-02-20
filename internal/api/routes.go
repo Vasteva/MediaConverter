@@ -209,6 +209,14 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 		}
 
+		// Subtitle generation is only supported with OpenAI (Whisper API).
+		// Surface this early so the user gets a clear error instead of a runtime failure.
+		if req.CreateSubtitles && cfg.AIProvider != "openai" {
+			return c.Status(400).JSON(fiber.Map{
+				"error": fmt.Sprintf("subtitle generation requires the OpenAI provider (current provider: %q)", cfg.AIProvider),
+			})
+		}
+
 		// Security: Validate paths to prevent arbitrary file access
 		sourcePath, err := security.ValidatePath(req.SourcePath, cfg.SourceDir)
 		if err != nil {

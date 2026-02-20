@@ -257,7 +257,8 @@ Main Goroutine
         └─ Worker N Goroutine
             └─ Process Job → FFmpeg/MakeMKV
 
-Job Queue: Buffered channel (1000 capacity)
+Job Queue: Priority heap (max-heap by Priority field, FIFO tiebreak by CreatedAt)
+Job Dispatch: sync.Cond — workers block until a job is pushed
 Job Storage: Map with RWMutex for thread-safe access
 ```
 

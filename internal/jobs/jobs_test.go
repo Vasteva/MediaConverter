@@ -85,7 +85,7 @@ func TestManager_Lifecycle(t *testing.T) {
 	mgr.mu.RUnlock()
 
 	if status == StatusPending {
-		// It should be processing at least
+		t.Errorf("expected job to be picked up by worker (status Processing or later), but it is still Pending")
 	}
 
 	mgr.Stop()
