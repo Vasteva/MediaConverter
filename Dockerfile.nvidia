@@ -22,16 +22,20 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o vastiva ./cmd/server
 FROM nvidia/cuda:12.3.1-runtime-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install FFmpeg with NVIDIA codec support and other dependencies
+# Install FFmpeg with NVIDIA codec support, MakeMKV, and other dependencies
 RUN apt-get update && apt-get install -y \
     software-properties-common \
     && add-apt-repository ppa:savoury1/ffmpeg4 \
     && add-apt-repository ppa:savoury1/ffmpeg5 \
-    && apt-get update && apt-get install -y \
+    && add-apt-repository ppa:heyarje/makemkv-beta \
+    && apt-get update \
+    && echo "makemkv-bin makemkv-bin/accepted-eula boolean true" | debconf-set-selections \
+    && apt-get install -y \
     ffmpeg \
     libnpp-dev-12-3 \
     libnvidia-encode-535 \
     libnvidia-decode-535 \
+    makemkv-bin makemkv-oss \
     ca-certificates \
     curl \
     && rm -rf /var/lib/apt/lists/*

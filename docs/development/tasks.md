@@ -88,10 +88,9 @@ Per the README, these features are planned but not implemented:
 - [ ] **Advanced scheduling** — Job scheduling by time/day
 - [ ] **Webhook notifications** — Notify external services on events
 
-### 14. MakeMKV Not Installed in Docker Image
-- **Status:** Documentation Gap
-- **Details:** Dockerfile doesn't install MakeMKV; users expecting disc extraction will need to mount it separately.
-- **Fix:** Document this limitation or add optional MakeMKV installation.
+### 14. ~~MakeMKV Not Installed in Docker Image~~ ✅ FIXED
+- **Status:** ✅ Resolved
+- **Details:** MakeMKV (`makemkv-bin`, `makemkv-oss`) is now installed in both `Dockerfile` and `Dockerfile.nvidia` via `ppa:heyarje/makemkv-beta`. Both compose files include a commented-out `/dev/sr0` device entry. A disc extraction section has been added to `docs/getting-started/deployment.md`.
 
 ### 15. Scanner Config Persistence
 - **Status:** Works but Fragile

@@ -101,6 +101,57 @@ docker-compose up -d
 docker-compose logs -f
 ```
 
+## Disc Extraction (MakeMKV)
+
+MakeMKV is included in both Docker images. To use disc extraction jobs you must also pass your optical drive device into the container.
+
+### 1. Find your optical drive device
+
+```bash
+ls -la /dev/sr* /dev/cdrom 2>/dev/null
+```
+
+Typical result: `/dev/sr0` (first drive), `/dev/sr1` (second drive).
+
+### 2. Enable the device in docker-compose.yml
+
+Uncomment the `devices` entry in `docker-compose.yml`:
+
+```yaml
+devices:
+  - /dev/dri:/dev/dri
+  - /dev/sr0:/dev/sr0   # adjust path if needed
+```
+
+For the NVIDIA compose override, uncomment the matching block in `docker-compose.nvidia.yml`.
+
+### 3. Restart the container
+
+```bash
+docker-compose up -d
+```
+
+### Troubleshooting disc extraction
+
+**"makemkvcon not found"** — the binary is missing from the image. Rebuild the image:
+```bash
+docker-compose build --no-cache
+```
+
+**"permission denied" on /dev/sr0** — add the container user to the `cdrom` group on the host, or run with `privileged: true` (not recommended in production):
+```bash
+# Check device group
+ls -la /dev/sr0
+# → crw-rw---- 1 root cdrom ...
+```
+
+**Disc scan returns no titles** — ensure the disc is inserted and the drive is not mounted by the host OS:
+```bash
+umount /dev/sr0
+```
+
+---
+
 ## Traefik Integration (Optional)
 
 If using Traefik for automatic HTTPS:

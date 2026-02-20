@@ -22,6 +22,9 @@ services:
       - vastiva-data:/data
     devices:
       - /dev/dri:/dev/dri
+      # Uncomment to enable disc extraction (MakeMKV). Adjust device path if your
+      # optical drive appears as /dev/sr1, /dev/cdrom, etc.
+      # - /dev/sr0:/dev/sr0
     ports:
       - "8091:80"
     restart: unless-stopped
