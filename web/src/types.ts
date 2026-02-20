@@ -20,6 +20,11 @@ export interface Job {
     outputSize?: number;
     aiCleaned?: boolean;
     aiSubtitles?: boolean;
+    verifyOutput?: boolean;
+    verified?: boolean;
+    deleteSource?: boolean;
+    maxRetries?: number;
+    retryCount?: number;
 }
 
 export interface SystemConfig {

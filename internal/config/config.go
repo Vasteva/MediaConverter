@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,7 +12,11 @@ import (
 	"github.com/Vasteva/MediaConverter/internal/system"
 )
 
+const currentSchemaVersion = 1
+
 type Config struct {
+	SchemaVersion int `json:"schemaVersion"`
+
 	// Server
 	Port string `json:"port"`
 
@@ -58,6 +63,7 @@ const ConfigFile = "/data/config.json"
 func Load() *Config {
 	// Default values
 	cfg := &Config{
+		SchemaVersion:        currentSchemaVersion,
 		Port:                 getEnv("PORT", "8080"),
 		SourceDir:            getEnv("SOURCE_DIR", "/storage"),
 		DestDir:              getEnv("DEST_DIR", "/output"),
@@ -106,6 +112,13 @@ func (c *Config) loadFromDisk() error {
 	importJSON := &Config{}
 	if err := json.Unmarshal(data, importJSON); err != nil {
 		return err
+	}
+
+	// Warn if the on-disk schema is older than the current version.
+	if importJSON.SchemaVersion == 0 {
+		log.Printf("[Config] Warning: config file has no schemaVersion; treating as version 0. Current version is %d.", currentSchemaVersion)
+	} else if importJSON.SchemaVersion < currentSchemaVersion {
+		log.Printf("[Config] Warning: config file schema version %d is older than current version %d. Some defaults may apply.", importJSON.SchemaVersion, currentSchemaVersion)
 	}
 
 	// Apply overrides

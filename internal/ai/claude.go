@@ -16,7 +16,7 @@ type ClaudeProvider struct {
 
 func NewClaudeProvider(apiKey, model string) *ClaudeProvider {
 	if model == "" {
-		model = "claude-3-5-sonnet-20240620"
+		model = "claude-sonnet-4-6"
 	}
 	return &ClaudeProvider{APIKey: apiKey, Model: model}
 }

@@ -2,10 +2,8 @@ package api
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"log"
-	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +18,7 @@ import (
 	"github.com/Vasteva/MediaConverter/internal/scanner"
 	"github.com/Vasteva/MediaConverter/internal/security"
 	"github.com/Vasteva/MediaConverter/internal/system"
+	"github.com/Vasteva/MediaConverter/internal/util"
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -27,6 +26,13 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 	if fs != nil {
 		jm.OnJobComplete = fs.CompleteProcessed
 	}
+
+	// Wire SSE broadcaster so every job state change is pushed to connected clients.
+	broadcaster := NewSSEBroadcaster()
+	if jm != nil {
+		jm.OnJobUpdate = broadcaster.Broadcast
+	}
+	RegisterSSERoute(app, broadcaster, jm, cfg)
 
 	api := app.Group("/api", AuthMiddleware(cfg))
 	RegisterFSRoutes(api, cfg)
@@ -197,6 +203,7 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			CreateSubtitles bool         `json:"createSubtitles"`
 			Upscale         bool         `json:"upscale"`
 			Resolution      string       `json:"resolution"`
+			MaxRetries      int          `json:"maxRetries"`
 		}
 		if err := c.BodyParser(&req); err != nil {
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
@@ -225,7 +232,7 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		}
 
 		job := &jobs.Job{
-			ID:              generateID(),
+			ID:              util.GenerateID(),
 			Type:            req.Type,
 			SourcePath:      sourcePath,
 			DestinationPath: destPath,
@@ -234,6 +241,7 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			CreateSubtitles: req.CreateSubtitles,
 			Upscale:         req.Upscale,
 			Resolution:      req.Resolution,
+			MaxRetries:      req.MaxRetries,
 			CreatedAt:       time.Now(),
 		}
 		jm.AddJob(job)
@@ -298,6 +306,9 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			cfg.QualityPreset = req.QualityPreset
 		}
 		if req.CRF != 0 {
+			if req.CRF < 0 || req.CRF > 51 {
+				return c.Status(400).JSON(fiber.Map{"error": "CRF must be between 0 and 51"})
+			}
 			cfg.CRF = req.CRF
 		}
 		if req.AIProvider != "" {
@@ -522,21 +533,3 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 	})
 }
 
-func generateID() string {
-	return time.Now().Format("20060102150405") + "-" + randomString(6)
-}
-
-func randomString(n int) string {
-	const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
-	b := make([]byte, n)
-	for i := range b {
-		idx, err := rand.Int(rand.Reader, big.NewInt(int64(len(letters))))
-		if err != nil {
-			// Fallback to less secure but functional method
-			b[i] = letters[i%len(letters)]
-			continue
-		}
-		b[i] = letters[idx.Int64()]
-	}
-	return string(b)
-}

@@ -161,16 +161,38 @@ function App() {
     }
   }, [token, fetchJobs, fetchConfigs, fetchStats]);
 
-  // Poll for updates every 2 seconds
+  // Real-time job updates via SSE
   useEffect(() => {
     if (!token) return;
 
-    const interval = setInterval(() => {
-      fetchJobs();
-      fetchStats();
-    }, 2000);
+    const es = new EventSource(`/api/events?token=${encodeURIComponent(token)}`);
+
+    es.addEventListener('job', (e: MessageEvent) => {
+      const updatedJob: Job = JSON.parse(e.data);
+      setJobs(prev => {
+        const idx = prev.findIndex(j => j.id === updatedJob.id);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = updatedJob;
+          return next;
+        }
+        return [...prev, updatedJob];
+      });
+    });
+
+    es.onerror = () => {
+      // EventSource reconnects automatically; reconnect will re-send full job snapshot.
+    };
+
+    return () => es.close();
+  }, [token]);
+
+  // Poll system stats every 5 seconds (CPU/RAM/GPU are not event-driven)
+  useEffect(() => {
+    if (!token) return;
+    const interval = setInterval(fetchStats, 5000);
     return () => clearInterval(interval);
-  }, [token, fetchJobs, fetchStats]);
+  }, [token, fetchStats]);
 
   // Create new job
   const createJob = useCallback(async (jobData: Partial<Job>) => {

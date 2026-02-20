@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"container/heap"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -63,6 +64,8 @@ type Job struct {
 	VerifyOutput    bool         `json:"verifyOutput"` // Premium feature
 	Verified        bool         `json:"verified"`
 	DeleteSource    bool         `json:"deleteSource"`
+	MaxRetries      int          `json:"maxRetries"`  // 0 = disabled
+	RetryCount      int          `json:"retryCount"`
 
 	// Internal
 	ctx    context.Context
@@ -70,9 +73,35 @@ type Job struct {
 	cmd    *exec.Cmd
 }
 
+// priorityQueue implements heap.Interface for *Job.
+// Higher Priority value = dequeued first. Equal-priority jobs are ordered FIFO by CreatedAt.
+type priorityQueue []*Job
+
+func (pq priorityQueue) Len() int { return len(pq) }
+func (pq priorityQueue) Less(i, j int) bool {
+	if pq[i].Priority != pq[j].Priority {
+		return pq[i].Priority > pq[j].Priority // max-heap
+	}
+	return pq[i].CreatedAt.Before(pq[j].CreatedAt) // FIFO tiebreak
+}
+func (pq priorityQueue) Swap(i, j int) { pq[i], pq[j] = pq[j], pq[i] }
+func (pq *priorityQueue) Push(x interface{}) {
+	*pq = append(*pq, x.(*Job))
+}
+func (pq *priorityQueue) Pop() interface{} {
+	old := *pq
+	n := len(old)
+	job := old[n-1]
+	old[n-1] = nil
+	*pq = old[:n-1]
+	return job
+}
+
 type Manager struct {
 	jobs          map[string]*Job
-	queue         chan *Job
+	pq            priorityQueue
+	pqMu          sync.Mutex
+	pqCond        *sync.Cond
 	maxConcurrent int
 	mu            sync.RWMutex
 	wg            sync.WaitGroup
@@ -82,6 +111,7 @@ type Manager struct {
 	makemkv       *media.MakeMKVWrapper
 	ai            ai.Provider
 	OnJobComplete func(*Job)
+	OnJobUpdate   func(*Job)
 	jobsFilePath  string
 }
 
@@ -98,7 +128,6 @@ func NewManager(cfg *config.Config, aiProvider ai.Provider, jobsFilePath string)
 
 	m := &Manager{
 		jobs:          make(map[string]*Job),
-		queue:         make(chan *Job, 1000),
 		maxConcurrent: cfg.MaxConcurrentJobs,
 		stopCh:        make(chan struct{}),
 		config:        cfg,
@@ -107,6 +136,7 @@ func NewManager(cfg *config.Config, aiProvider ai.Provider, jobsFilePath string)
 		ai:            aiProvider,
 		jobsFilePath:  jobsFilePath,
 	}
+	m.pqCond = sync.NewCond(&m.pqMu)
 
 	// Load existing jobs from disk
 	if err := m.Load(); err != nil && !os.IsNotExist(err) {
@@ -126,6 +156,7 @@ func (m *Manager) Start() {
 
 func (m *Manager) Stop() {
 	close(m.stopCh)
+	m.pqCond.Broadcast() // wake workers blocked in Wait so they can observe stopCh
 	m.wg.Wait()
 	log.Println("Job manager stopped")
 }
@@ -138,12 +169,27 @@ func (m *Manager) GetAI() ai.Provider {
 func (m *Manager) worker(id int) {
 	defer m.wg.Done()
 	for {
+		m.pqMu.Lock()
+		// Wait until there is work or a stop signal.
+		for m.pq.Len() == 0 {
+			select {
+			case <-m.stopCh:
+				m.pqMu.Unlock()
+				return
+			default:
+			}
+			m.pqCond.Wait() // releases pqMu; re-acquires it on wakeup
+		}
+		// Re-check stop after wakeup (Stop broadcasts to unblock waiting workers).
 		select {
 		case <-m.stopCh:
+			m.pqMu.Unlock()
 			return
-		case job := <-m.queue:
-			m.processJob(job)
+		default:
 		}
+		job := heap.Pop(&m.pq).(*Job)
+		m.pqMu.Unlock()
+		m.processJob(job)
 	}
 }
 
@@ -151,8 +197,14 @@ func (m *Manager) AddJob(job *Job) {
 	m.mu.Lock()
 	m.jobs[job.ID] = job
 	m.mu.Unlock()
-	m.Save() // Persist to disk
-	m.queue <- job
+	m.Save()
+	if m.OnJobUpdate != nil {
+		m.OnJobUpdate(job)
+	}
+	m.pqMu.Lock()
+	heap.Push(&m.pq, job)
+	m.pqMu.Unlock()
+	m.pqCond.Signal()
 }
 
 func (m *Manager) GetJob(id string) *Job {
@@ -194,6 +246,9 @@ func (m *Manager) updateJob(job *Job, fn func(*Job)) {
 	fn(job)
 	job.mu.Unlock()
 	m.Save()
+	if m.OnJobUpdate != nil {
+		m.OnJobUpdate(job)
+	}
 }
 
 func (m *Manager) processJob(job *Job) {
@@ -336,6 +391,35 @@ func (m *Manager) processJob(job *Job) {
 	}
 
 	if err != nil {
+		job.mu.RLock()
+		retryCount := job.RetryCount
+		maxRetries := job.MaxRetries
+		job.mu.RUnlock()
+
+		if retryCount < maxRetries {
+			// Exponential backoff: 2^retryCount seconds, capped at 60s
+			backoff := time.Duration(1<<uint(retryCount)) * time.Second
+			if backoff > 60*time.Second {
+				backoff = 60 * time.Second
+			}
+			log.Printf("[Job %s] Failed (attempt %d/%d), retrying in %s: %v", job.ID, retryCount+1, maxRetries, backoff, err)
+			m.updateJob(job, func(j *Job) {
+				j.Status = StatusPending
+				j.RetryCount = retryCount + 1
+				j.Error = fmt.Sprintf("Retry %d/%d: %v", retryCount+1, maxRetries, err)
+				j.Progress = 0
+				j.FPS = 0
+				j.ETA = ""
+				j.StatusDetail = fmt.Sprintf("Retrying in %s", backoff.Round(time.Second))
+			})
+			time.Sleep(backoff)
+			m.pqMu.Lock()
+			heap.Push(&m.pq, job)
+			m.pqMu.Unlock()
+			m.pqCond.Signal()
+			return
+		}
+
 		m.updateJob(job, func(j *Job) {
 			j.Status = StatusFailed
 			j.Error = err.Error()
@@ -672,6 +756,7 @@ func (m *Manager) Load() error {
 		// Reset processing jobs to pending (interrupted by restart)
 		if job.Status == StatusProcessing {
 			job.Status = StatusPending
+			job.RetryCount = 0 // fresh start after server restart
 			pendingJobs++
 		}
 		m.jobs[job.ID] = job
@@ -684,17 +769,24 @@ func (m *Manager) Load() error {
 // RequeuePendingJobs adds all pending jobs back to the queue (call after Start())
 func (m *Manager) RequeuePendingJobs() {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	count := 0
+	pending := make([]*Job, 0)
 	for _, job := range m.jobs {
 		if job.Status == StatusPending {
-			m.queue <- job
-			count++
+			pending = append(pending, job)
 		}
 	}
+	m.mu.RUnlock()
 
-	if count > 0 {
-		log.Printf("Requeued %d pending jobs", count)
+	if len(pending) == 0 {
+		return
 	}
+
+	m.pqMu.Lock()
+	for _, job := range pending {
+		heap.Push(&m.pq, job)
+	}
+	m.pqMu.Unlock()
+	m.pqCond.Broadcast()
+
+	log.Printf("Requeued %d pending jobs", len(pending))
 }

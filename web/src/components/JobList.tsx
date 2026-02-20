@@ -22,6 +22,7 @@ export default function JobList({ jobs, onCreateJob, onCancelJob }: JobListProps
     const [upscale, setUpscale] = useState(false);
     const [resolution, setResolution] = useState('1080p');
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [maxRetries, setMaxRetries] = useState(0);
     const [showFileBrowser, setShowFileBrowser] = useState(false);
     const [activeBrowserField, setActiveBrowserField] = useState<'source' | 'dest' | null>(null);
 
@@ -49,7 +50,8 @@ export default function JobList({ jobs, onCreateJob, onCancelJob }: JobListProps
             priority: 5,
             createSubtitles,
             upscale,
-            resolution
+            resolution,
+            maxRetries
         });
 
         setIsSubmitting(false);
@@ -160,6 +162,11 @@ export default function JobList({ jobs, onCreateJob, onCancelJob }: JobListProps
                                                 <span className={`badge badge-${job.status}`} title={job.error || ''}>
                                                     {job.status === 'processing' && job.statusDetail ? job.statusDetail : job.status}
                                                 </span>
+                                                {(job.retryCount ?? 0) > 0 && (
+                                                    <span className="text-xs text-secondary">
+                                                        retry {job.retryCount}/{job.maxRetries}
+                                                    </span>
+                                                )}
                                                 {job.status === 'failed' && job.error && (
                                                     <span className="text-xs text-danger" style={{ maxWidth: '200px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={job.error}>
                                                         {job.error}
@@ -329,6 +336,22 @@ export default function JobList({ jobs, onCreateJob, onCancelJob }: JobListProps
                                             </select>
                                         </div>
                                     )}
+                                </div>
+                                <div className="form-group mb-4">
+                                    <label className="label mb-2 block">Max Retries on Failure</label>
+                                    <select
+                                        className="input select text-sm"
+                                        value={maxRetries}
+                                        onChange={e => setMaxRetries(Number(e.target.value))}
+                                    >
+                                        <option value={0}>No retries (default)</option>
+                                        <option value={1}>1 retry</option>
+                                        <option value={2}>2 retries</option>
+                                        <option value={3}>3 retries</option>
+                                    </select>
+                                    <p className="text-xs text-secondary mt-1">
+                                        Automatically retry the job with exponential backoff if it fails.
+                                    </p>
                                 </div>
                             </div>
                             <div className="modal-footer flexjustify-end gap-2">

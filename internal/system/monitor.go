@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -41,21 +42,86 @@ func GetStats() Stats {
 	return stats
 }
 
+// cpuSample holds a single /proc/stat aggregate reading.
+type cpuSample struct {
+	total float64
+	idle  float64
+}
+
+var (
+	cpuMu         sync.Mutex
+	lastCPUSample *cpuSample
+	lastCPUTime   time.Time
+)
+
+func readCPUSample() (*cpuSample, error) {
+	file, err := os.Open("/proc/stat")
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "cpu ") {
+			continue
+		}
+		fields := strings.Fields(line)
+		// Fields: cpu user nice system idle iowait irq softirq steal guest guest_nice
+		if len(fields) < 5 {
+			break
+		}
+		var vals [10]float64
+		for i := 1; i < len(fields) && i <= 10; i++ {
+			vals[i-1], _ = strconv.ParseFloat(fields[i], 64)
+		}
+		idle := vals[3] + vals[4] // idle + iowait
+		total := 0.0
+		for _, v := range vals {
+			total += v
+		}
+		return &cpuSample{total: total, idle: idle}, nil
+	}
+	return nil, fmt.Errorf("cpu line not found in /proc/stat")
+}
+
 func getCPUUsage() float64 {
-	// Simple /proc/stat parser for CPU usage
-	// We'd need two samples to be accurate, for now let's use load average as a proxy
-	// or just a mock if we want it fast. But let's try reading loadavg.
-	data, err := os.ReadFile("/proc/loadavg")
+	cpuMu.Lock()
+	defer cpuMu.Unlock()
+
+	sample, err := readCPUSample()
 	if err != nil {
 		return 0
 	}
-	fields := strings.Fields(string(data))
-	if len(fields) > 0 {
-		load, _ := strconv.ParseFloat(fields[0], 64)
-		// Return load normalized to 100% (assuming multiple cores, this is rough)
-		return load * 10
+
+	now := time.Now()
+
+	if lastCPUSample == nil || now.Sub(lastCPUTime) > 30*time.Second {
+		// First call or stale sample: store and return 0 rather than a bogus value.
+		lastCPUSample = sample
+		lastCPUTime = now
+		return 0
 	}
-	return 0
+
+	deltaTotal := sample.total - lastCPUSample.total
+	deltaIdle := sample.idle - lastCPUSample.idle
+
+	lastCPUSample = sample
+	lastCPUTime = now
+
+	if deltaTotal <= 0 {
+		return 0
+	}
+
+	usage := ((deltaTotal - deltaIdle) / deltaTotal) * 100
+	if usage < 0 {
+		usage = 0
+	}
+	if usage > 100 {
+		usage = 100
+	}
+	return usage
 }
 
 func getMemoryUsage() float64 {

@@ -2,13 +2,11 @@ package scanner
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
-	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Vasteva/MediaConverter/internal/jobs"
+	"github.com/Vasteva/MediaConverter/internal/util"
 	"github.com/fsnotify/fsnotify"
 )
 
@@ -64,7 +63,7 @@ type ScannerConfig struct {
 
 func (c *ScannerConfig) Validate() {
 	if len(c.ExtractExtensions) == 0 {
-		c.ExtractExtensions = []string{".iso"}
+		c.ExtractExtensions = []string{".iso", ".img", ".mdf"}
 	}
 	if len(c.OptimizeExtensions) == 0 {
 		c.OptimizeExtensions = []string{
@@ -420,6 +419,10 @@ func (s *Scanner) scanDirectory(watchDir WatchDirectory) ([]string, error) {
 			if !watchDir.Recursive && path != watchDir.Path {
 				return filepath.SkipDir
 			}
+			// Update current path only on directory transitions (much cheaper than per-file)
+			s.statusMu.Lock()
+			s.status.CurrentPath = path
+			s.statusMu.Unlock()
 			return nil
 		}
 
@@ -427,12 +430,6 @@ func (s *Scanner) scanDirectory(watchDir WatchDirectory) ([]string, error) {
 		if s.matchesPatterns(path, watchDir) {
 			files = append(files, path)
 		}
-
-		// Update status periodically or per file? doing it here might be too chatty for lock
-		// Let's just track current path in loop
-		s.statusMu.Lock()
-		s.status.CurrentPath = path
-		s.statusMu.Unlock()
 
 		return nil
 	}
@@ -531,7 +528,7 @@ func (s *Scanner) createJobForFile(path string) error {
 
 	// Create job
 	job := &jobs.Job{
-		ID:              generateJobID(),
+		ID:              util.GenerateID(),
 		Type:            jobType,
 		SourcePath:      path,
 		DestinationPath: outputPath,
@@ -738,25 +735,6 @@ func (s *Scanner) isInDirectory(path, dir string) bool {
 	return !strings.HasPrefix(rel, "..")
 }
 
-// generateJobID creates a unique job ID
-func generateJobID() string {
-	return time.Now().Format("20060102150405") + "-" + randomString(6)
-}
-
-func randomString(n int) string {
-	const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
-	b := make([]byte, n)
-	for i := range b {
-		idx, err := rand.Int(rand.Reader, big.NewInt(int64(len(letters))))
-		if err != nil {
-			// Fallback to less secure but functional method
-			b[i] = letters[i%len(letters)]
-			continue
-		}
-		b[i] = letters[idx.Int64()]
-	}
-	return string(b)
-}
 
 // NewProcessedDB creates a new processed file database
 func NewProcessedDB(filePath string) (*ProcessedDB, error) {
