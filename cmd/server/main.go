@@ -76,7 +76,7 @@ func main() {
 		scannerCfg = &scanner.ScannerConfig{Enabled: false}
 	}
 
-	fileScanner, err := scanner.NewScanner(scannerCfg, jobManager, watchDirsFile)
+	fileScanner, err := scanner.NewScanner(scannerCfg, jobManager)
 	if err != nil {
 		log.Printf("Warning: Failed to initialize scanner: %v", err)
 	} else if scannerCfg.Enabled {
