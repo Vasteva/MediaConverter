@@ -36,7 +36,8 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     curl \
     makemkv-bin makemkv-oss \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /data /storage /output
 
 WORKDIR /app
 
@@ -50,5 +51,8 @@ ENV DEST_DIR=/output
 ENV SCANNER_PROCESSED_FILE=/data/processed.json
 
 EXPOSE 80
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:80/api/health || exit 1
 
 CMD ["/app/vastiva"]

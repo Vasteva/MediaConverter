@@ -28,6 +28,16 @@ func main() {
 	// Initialize configuration
 	cfg := config.Load()
 
+	// Warn if configured directories are not accessible (e.g. missing volume mounts)
+	for _, dir := range []struct{ name, path string }{
+		{"SOURCE_DIR", cfg.SourceDir},
+		{"DEST_DIR", cfg.DestDir},
+	} {
+		if _, err := os.Stat(dir.path); err != nil {
+			log.Printf("WARNING: %s (%s) is not accessible: %v — check your volume mounts", dir.name, dir.path, err)
+		}
+	}
+
 	// Initialize AI Provider
 	aiProvider, err := ai.NewProvider(ai.AIConfig{
 		Provider: cfg.AIProvider,
@@ -66,7 +76,7 @@ func main() {
 		scannerCfg = &scanner.ScannerConfig{Enabled: false}
 	}
 
-	fileScanner, err := scanner.NewScanner(scannerCfg, jobManager)
+	fileScanner, err := scanner.NewScanner(scannerCfg, jobManager, watchDirsFile)
 	if err != nil {
 		log.Printf("Warning: Failed to initialize scanner: %v", err)
 	} else if scannerCfg.Enabled {

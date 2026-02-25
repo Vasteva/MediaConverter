@@ -28,11 +28,27 @@ services:
     ports:
       - "8091:80"
     restart: unless-stopped
+    init: true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 4G
     networks:
       - traefik
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.vastiva.rule=Host(`media.vasteva.net`)"
+      - "traefik.http.routers.vastiva.rule=Host(`vasteva.wtzhome.com`)"
       - "traefik.http.routers.vastiva.entrypoints=websecure"
       - "traefik.http.routers.vastiva.tls.certresolver=letsencrypt"
       - "traefik.http.services.vastiva.loadbalancer.server.port=80"
