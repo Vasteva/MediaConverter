@@ -161,11 +161,23 @@ function App() {
     }
   }, [token, fetchJobs, fetchConfigs, fetchStats]);
 
-  // Real-time job updates via SSE
-  useEffect(() => {
-    if (!token) return;
+  // Real-time job updates via SSE.
+  // We exchange the long-lived session token for a short-lived (2-minute) SSE token
+  // so the session token never appears in server access logs or browser history.
+  const [sseToken, setSseToken] = useState<string | null>(null);
 
-    const es = new EventSource(`/api/events?token=${encodeURIComponent(token)}`);
+  useEffect(() => {
+    if (!token) { setSseToken(null); return; }
+    authFetch('/api/events/token', { method: 'POST' })
+      .then(r => r.json())
+      .then(({ token: t }: { token: string }) => setSseToken(t))
+      .catch(() => setSseToken(token)); // fall back to session token if exchange fails
+  }, [token, authFetch]);
+
+  useEffect(() => {
+    if (!sseToken) return;
+
+    const es = new EventSource(`/api/events?token=${encodeURIComponent(sseToken)}`);
 
     es.addEventListener('job', (e: MessageEvent) => {
       const updatedJob: Job = JSON.parse(e.data);
@@ -181,11 +193,16 @@ function App() {
     });
 
     es.onerror = () => {
-      // EventSource reconnects automatically; reconnect will re-send full job snapshot.
+      if (es.readyState === EventSource.CLOSED) {
+        // Connection permanently closed (likely expired token); refresh the SSE token.
+        es.close();
+        setSseToken(null);
+      }
+      // Otherwise EventSource will auto-retry with the same URL.
     };
 
     return () => es.close();
-  }, [token]);
+  }, [sseToken]);
 
   // Poll system stats every 5 seconds (CPU/RAM/GPU are not event-driven)
   useEffect(() => {
@@ -269,7 +286,12 @@ function App() {
   }, [authFetch, fetchConfigs]);
 
   if (showSetupWizard) {
-    return <SetupWizard onComplete={() => setShowSetupWizard(false)} />;
+    return (
+      <SetupWizard onComplete={(newToken: string) => {
+        setShowSetupWizard(false);
+        handleLogin(newToken);
+      }} />
+    );
   }
 
   if (isLoading) {
@@ -311,6 +333,9 @@ function App() {
             jobs={jobs}
             onCreateJob={createJob}
             onCancelJob={cancelJob}
+            subtitleMode={config?.subtitleMode}
+            sourceDir={config?.sourceDir}
+            destDir={config?.destDir}
           />
         )}
         {currentView === 'scanner' && scannerConfig && (
