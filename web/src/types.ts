@@ -43,6 +43,12 @@ export interface SystemConfig {
     planName?: string;
     verifyOutput?: boolean;
     deleteSource?: boolean;
+    subtitleMode?: 'always' | 'selective' | 'never';
+    subtitleLang?: string;
+    subtitleApiKey?: string;
+    subtitleUsername?: string;
+    subtitlePassword?: string;    // write-only — never returned by GET /api/config
+    subtitlePasswordSet?: boolean; // true when a password has been saved (replaces the value for display)
 }
 export interface WatchDirectory {
     path: string;

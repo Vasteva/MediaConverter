@@ -6,11 +6,14 @@ interface JobListProps {
     jobs: Job[];
     onCreateJob: (job: Partial<Job>) => Promise<boolean>;
     onCancelJob: (jobId: string) => Promise<boolean>;
+    subtitleMode?: 'always' | 'selective' | 'never';
+    sourceDir?: string;
+    destDir?: string;
 }
 
 type FilterType = 'all' | 'active' | 'completed' | 'failed';
 
-export default function JobList({ jobs, onCreateJob, onCancelJob }: JobListProps) {
+export default function JobList({ jobs, onCreateJob, onCancelJob, subtitleMode = 'selective', sourceDir, destDir }: JobListProps) {
     const [filter, setFilter] = useState<FilterType>('all');
     const [showCreateModal, setShowCreateModal] = useState(false);
 
@@ -289,23 +292,29 @@ export default function JobList({ jobs, onCreateJob, onCancelJob }: JobListProps
                                     </p>
                                 </div>
 
-                                <div className="form-group mb-4">
-                                    <label className="flex items-center gap-2 cursor-pointer">
-                                        <input
-                                            type="checkbox"
-                                            checked={createSubtitles}
-                                            onChange={e => setCreateSubtitles(e.target.checked)}
-                                            className="w-4 h-4"
-                                        />
-                                        <div className="flex items-center">
-                                            <span className="text-sm font-medium">Create AI Subtitles (Whisper)</span>
-                                            <span className="pro-tag ml-2">PRO</span>
-                                        </div>
-                                    </label>
-                                    <p className="text-xs text-secondary mt-1 ml-6">
-                                        Automatically generate SRT subtitles using AI transcription.
-                                    </p>
-                                </div>
+                                {subtitleMode === 'selective' && (
+                                    <div className="form-group mb-4">
+                                        <label className="flex items-center gap-2 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                checked={createSubtitles}
+                                                onChange={e => setCreateSubtitles(e.target.checked)}
+                                                className="w-4 h-4"
+                                            />
+                                            <span className="text-sm font-medium">Download Subtitles</span>
+                                        </label>
+                                        <p className="text-xs text-secondary mt-1 ml-6">
+                                            Search OpenSubtitles and save an SRT file alongside the output.
+                                        </p>
+                                    </div>
+                                )}
+                                {subtitleMode === 'always' && (
+                                    <div className="form-group mb-4">
+                                        <p className="text-xs text-secondary">
+                                            Subtitles will be downloaded automatically for this job.
+                                        </p>
+                                    </div>
+                                )}
 
                                 <div className="form-group mb-4">
                                     <label className="flex items-center gap-2 cursor-pointer">
@@ -389,7 +398,7 @@ export default function JobList({ jobs, onCreateJob, onCancelJob }: JobListProps
                     }}
                     selectMode={activeBrowserField === 'source' ? 'file' : 'both'}
                     title={activeBrowserField === 'source' ? "Select Source File" : "Select Destination"}
-                    initialPath={activeBrowserField === 'source' ? (sourcePath || '/') : (destPath || '/')}
+                    initialPath={activeBrowserField === 'source' ? (sourcePath || sourceDir || '/') : (destPath || destDir || sourceDir || '/')}
                     zIndex={1100}
                 />
             )}
