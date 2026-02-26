@@ -34,7 +34,7 @@ export default function FileBrowserModal({
     onClose,
     onSelect,
     title = 'Select File or Directory',
-    initialPath = '/storage',
+    initialPath = '/',
     selectMode = 'both'
 }: FileBrowserModalProps) {
     const [currentPath, setCurrentPath] = useState(initialPath);

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Vasteva/MediaConverter/internal/config"
@@ -51,6 +52,43 @@ func handleListFiles(c *fiber.Ctx, cfg *config.Config) error {
 
 	// Security: Restrict to SourceDir or DestDir
 	if _, err := security.ValidatePath(absPath, cfg.SourceDir, cfg.DestDir); err != nil {
+		// Check if the requested path is a parent of an allowed directory.
+		// If so, return a virtual listing showing only the accessible subdirs.
+		var virtualEntries []FileEntry
+		for _, allowedDir := range []string{cfg.SourceDir, cfg.DestDir} {
+			if allowedDir == "" {
+				continue
+			}
+			cleanAllowed := filepath.Clean(allowedDir)
+			prefix := absPath
+			if prefix != "/" {
+				prefix = prefix + string(filepath.Separator)
+			}
+			if strings.HasPrefix(cleanAllowed, prefix) {
+				info, statErr := os.Stat(cleanAllowed)
+				if statErr == nil {
+					virtualEntries = append(virtualEntries, FileEntry{
+						Name:    filepath.Base(cleanAllowed),
+						Path:    cleanAllowed,
+						IsDir:   true,
+						ModTime: info.ModTime(),
+					})
+				}
+			}
+		}
+		if len(virtualEntries) > 0 {
+			log.Printf("[FS] Returning virtual listing for parent path: %s", absPath)
+			parent := filepath.Dir(absPath)
+			if absPath == "/" {
+				parent = ""
+			}
+			return c.JSON(FileListResponse{
+				Path:    absPath,
+				Parent:  parent,
+				Entries: virtualEntries,
+				IsRoot:  absPath == "/",
+			})
+		}
 		log.Printf("[FS] Access denied for path: %s", absPath)
 		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
 	}
