@@ -53,7 +53,7 @@ export default function FileBrowserModal({
             setSelectedItem(null);
 
             try {
-                const token = localStorage.getItem('token');
+                const token = sessionStorage.getItem('token');
                 const encodedPath = encodeURIComponent(currentPath);
                 const response = await fetch(`/api/fs/list?path=${encodedPath}`, {
                     headers: {

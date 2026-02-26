@@ -33,7 +33,7 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
     useEffect(() => {
         const fetchStatus = async () => {
             try {
-                const token = localStorage.getItem('token');
+                const token = sessionStorage.getItem('token');
                 const res = await fetch('/api/scanner/status', {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
@@ -203,8 +203,7 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
 
                         <div className="form-group">
                             <label className="label mb-2 block flex items-center">
-                                AI Subtitles (Whisper)
-                                <span className="pro-tag ml-2">PRO</span>
+                                Download Subtitles
                             </label>
                             <label className="flex items-center gap-2 cursor-pointer">
                                 <input
@@ -213,7 +212,7 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
                                     onChange={e => setConfig({ ...config, autoCreateSubtitles: e.target.checked })}
                                     className="w-4 h-4"
                                 />
-                                <span className="text-secondary text-sm">Generate AI subtitles using Whisper for new jobs</span>
+                                <span className="text-secondary text-sm">Attempt subtitle download for auto-created jobs</span>
                             </label>
                         </div>
 
@@ -361,7 +360,7 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
                         fetch('/api/scanner/scan', {
                             method: 'POST',
                             headers: {
-                                'Authorization': `Bearer ${localStorage.getItem('token')}`
+                                'Authorization': `Bearer ${sessionStorage.getItem('token')}`
                             }
                         })
                             .then(res => {
