@@ -89,15 +89,14 @@ type ScanStatus struct {
 	Duration     string    `json:"duration"`
 }
 
-const ScannerConfigFile = "/data/scanner_config.json"
-
 // Scanner manages automatic file discovery and job creation
 type Scanner struct {
-	config      *ScannerConfig
-	jobManager  *jobs.Manager
-	watcher     *fsnotify.Watcher
-	processedDB *ProcessedDB
-	mu          sync.RWMutex
+	config         *ScannerConfig
+	configFilePath string
+	jobManager     *jobs.Manager
+	watcher        *fsnotify.Watcher
+	processedDB    *ProcessedDB
+	mu             sync.RWMutex
 	// Status
 	status   ScanStatus
 	statusMu sync.RWMutex
@@ -134,7 +133,7 @@ type ProcessedFile struct {
 }
 
 // NewScanner creates a new file scanner
-func NewScanner(config *ScannerConfig, jobManager *jobs.Manager) (*Scanner, error) {
+func NewScanner(config *ScannerConfig, jobManager *jobs.Manager, configFilePath string) (*Scanner, error) {
 	if config == nil {
 		return nil, fmt.Errorf("scanner config is required")
 	}
@@ -149,13 +148,14 @@ func NewScanner(config *ScannerConfig, jobManager *jobs.Manager) (*Scanner, erro
 	}
 
 	scanner := &Scanner{
-		config:      config,
-		jobManager:  jobManager,
-		processedDB: processedDB,
-		stopCh:      make(chan struct{}),
-		pending:     make(map[string]time.Time),
-		ctx:         ctx,
-		cancel:      cancel,
+		config:         config,
+		configFilePath: configFilePath,
+		jobManager:     jobManager,
+		processedDB:    processedDB,
+		stopCh:         make(chan struct{}),
+		pending:        make(map[string]time.Time),
+		ctx:            ctx,
+		cancel:         cancel,
 	}
 
 	// Try to load persisted config, overriding defaults
@@ -241,10 +241,11 @@ func (s *Scanner) Stop() {
 	close(s.stopCh)
 	s.stopCh = nil // Mark as stopped
 	s.cancel()
+	w := s.watcher // capture under lock to avoid TOCTOU with UpdateConfig
 	s.mu.Unlock()
 
-	if s.watcher != nil {
-		s.watcher.Close()
+	if w != nil {
+		w.Close()
 	}
 
 	s.wg.Wait()
@@ -315,15 +316,17 @@ func (s *Scanner) UpdateConfig(newCfg *ScannerConfig) error {
 	s.mu.Unlock()
 
 	// Re-initialize watcher if mode changed to watch or hybrid
+	var newWatcher *fsnotify.Watcher
 	if newCfg.Mode == ScanModeWatch || newCfg.Mode == ScanModeHybrid {
-		watcher, err := fsnotify.NewWatcher()
+		var err error
+		newWatcher, err = fsnotify.NewWatcher()
 		if err != nil {
 			return fmt.Errorf("failed to create file watcher: %w", err)
 		}
-		s.watcher = watcher
-	} else {
-		s.watcher = nil
 	}
+	s.mu.Lock()
+	s.watcher = newWatcher
+	s.mu.Unlock()
 
 	// Start if enabled
 	if newCfg.Enabled {
@@ -358,6 +361,11 @@ func (s *Scanner) ScanAll() error {
 		s.statusMu.Unlock()
 		s.isScanning.Store(false)
 	}()
+
+	if len(s.config.WatchDirectories) == 0 {
+		log.Println("[Scanner] WARNING: ScanAll() called but no watch directories are configured — nothing to scan")
+		return nil
+	}
 
 	log.Println("[Scanner] Starting full scan of all directories")
 
@@ -627,6 +635,17 @@ func (s *Scanner) addWatcher(watchDir WatchDirectory) error {
 func (s *Scanner) watchFiles() {
 	defer s.wg.Done()
 
+	// Capture watcher reference once to avoid re-reading s.watcher on every
+	// select iteration, which would race with UpdateConfig reassigning it.
+	s.mu.RLock()
+	w := s.watcher
+	s.mu.RUnlock()
+
+	if w == nil {
+		log.Println("[Scanner] File watcher started but no watcher configured")
+		return
+	}
+
 	log.Println("[Scanner] File watcher started")
 
 	for {
@@ -634,7 +653,7 @@ func (s *Scanner) watchFiles() {
 		case <-s.stopCh:
 			return
 
-		case event, ok := <-s.watcher.Events:
+		case event, ok := <-w.Events:
 			if !ok {
 				return
 			}
@@ -643,7 +662,7 @@ func (s *Scanner) watchFiles() {
 				s.handleNewFile(event.Name)
 			}
 
-		case err, ok := <-s.watcher.Errors:
+		case err, ok := <-w.Errors:
 			if !ok {
 				return
 			}
@@ -847,15 +866,15 @@ func (s *Scanner) saveConfig() error {
 		return err
 	}
 
-	tmp := ScannerConfigFile + ".tmp"
+	tmp := s.configFilePath + ".tmp"
 	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, ScannerConfigFile)
+	return os.Rename(tmp, s.configFilePath)
 }
 
 func (s *Scanner) loadConfig() error {
-	data, err := os.ReadFile(ScannerConfigFile)
+	data, err := os.ReadFile(s.configFilePath)
 	if err != nil {
 		return err
 	}

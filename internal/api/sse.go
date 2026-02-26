@@ -68,7 +68,7 @@ func (b *SSEBroadcaster) Broadcast(job *jobs.Job) {
 func RegisterSSERoute(app *fiber.App, broadcaster *SSEBroadcaster, jm *jobs.Manager, cfg *config.Config) {
 	app.Get("/api/events", func(c *fiber.Ctx) error {
 		token := c.Query("token")
-		if !validateToken(token, cfg.AdminPassword) {
+		if !validateSSEToken(token, cfg.AdminPassword) {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
 		}
 

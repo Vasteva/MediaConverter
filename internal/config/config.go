@@ -49,6 +49,13 @@ type Config struct {
 	ScannerAutoCreate    bool   `json:"scannerAutoCreate"`
 	ScannerProcessedFile string `json:"scannerProcessedFile"`
 
+	// Subtitles
+	SubtitleMode     string `json:"subtitleMode"`     // "always", "selective", "never"
+	SubtitleLang     string `json:"subtitleLang"`     // ISO 639-1, e.g. "en"
+	SubtitleAPIKey   string `json:"subtitleApiKey"`   // OpenSubtitles API (app) key
+	SubtitleUsername string `json:"subtitleUsername"` // OpenSubtitles account username
+	SubtitlePassword string `json:"subtitlePassword"` // OpenSubtitles account password
+
 	// Processing
 	VerifyOutput bool `json:"verifyOutput"` // Default: false (Pro only)
 	DeleteSource bool `json:"deleteSource"` // Default: false
@@ -82,6 +89,11 @@ func Load() *Config {
 		ScannerIntervalSec:   getEnvInt("SCANNER_INTERVAL_SEC", 300),
 		ScannerAutoCreate:    getEnvBool("SCANNER_AUTO_CREATE", true),
 		ScannerProcessedFile: getEnv("SCANNER_PROCESSED_FILE", "/data/processed.json"),
+		SubtitleMode:         getEnv("SUBTITLE_MODE", "selective"),
+		SubtitleLang:         getEnv("SUBTITLE_LANG", "en"),
+		SubtitleAPIKey:       getEnv("SUBTITLE_API_KEY", ""),
+		SubtitleUsername:     getEnv("SUBTITLE_USERNAME", ""),
+		SubtitlePassword:     getEnv("SUBTITLE_PASSWORD", ""),
 	}
 
 	if cfg.GPUVendor == "auto" || cfg.GPUVendor == "" {
@@ -104,14 +116,20 @@ func (c *Config) loadFromDisk() error {
 	if err != nil {
 		return err
 	}
-	// We decode into a temporary struct to only override non-empty values or we just overwrite everything?
-	// For simplicity, let's just overwrite. The disk config is the source of truth for changes.
-	// However, we must be careful not to zero out environment variables if the json is partial.
-	// But usually if we save, we save the whole struct.
-	// Let's unmarshal directly into c.
+
 	importJSON := &Config{}
 	if err := json.Unmarshal(data, importJSON); err != nil {
 		return err
+	}
+
+	// Detect which boolean keys are actually present in the JSON so we can
+	// distinguish an explicit false from a missing field (Go zero-value for bool).
+	// Without this, an old config.json without a key would silently override env vars.
+	var rawFields map[string]json.RawMessage
+	_ = json.Unmarshal(data, &rawFields)
+	hasBool := func(key string) bool {
+		_, ok := rawFields[key]
+		return ok
 	}
 
 	// Warn if the on-disk schema is older than the current version.
@@ -171,30 +189,44 @@ func (c *Config) loadFromDisk() error {
 	}
 
 	// Scanner
-	// Booleans are tricky because false is zero value.
-	// To handle this properly we'd need pointers or a map, but for now let's say
-	// if the config file exists, we trust it fully for simple types if we assume it was written by Save().
-	// But Unmarshal over 'c' would zero out fields missing in JSON.
-	// So we strictly copy meaningful values.
-	// For booleans, we might need to assume if it's in the file, we take it.
-	// But we can't know if it's "in the file" vs "false" without using map.
-	// Let's just create a custom save/load for critical paths or rely on the main config update flow.
-	// Given the context (Admin Password issue), ensuring AdminPassword persistence is key.
-
-	c.ScannerEnabled = importJSON.ScannerEnabled
+	if hasBool("scannerEnabled") {
+		c.ScannerEnabled = importJSON.ScannerEnabled
+	}
 	if importJSON.ScannerMode != "" {
 		c.ScannerMode = importJSON.ScannerMode
 	}
 	if importJSON.ScannerIntervalSec != 0 {
 		c.ScannerIntervalSec = importJSON.ScannerIntervalSec
 	}
-	c.ScannerAutoCreate = importJSON.ScannerAutoCreate
+	if hasBool("scannerAutoCreate") {
+		c.ScannerAutoCreate = importJSON.ScannerAutoCreate
+	}
 	if importJSON.ScannerProcessedFile != "" {
 		c.ScannerProcessedFile = importJSON.ScannerProcessedFile
 	}
 
-	c.VerifyOutput = importJSON.VerifyOutput
-	c.DeleteSource = importJSON.DeleteSource
+	if hasBool("verifyOutput") {
+		c.VerifyOutput = importJSON.VerifyOutput
+	}
+	if hasBool("deleteSource") {
+		c.DeleteSource = importJSON.DeleteSource
+	}
+
+	if importJSON.SubtitleMode != "" {
+		c.SubtitleMode = importJSON.SubtitleMode
+	}
+	if importJSON.SubtitleLang != "" {
+		c.SubtitleLang = importJSON.SubtitleLang
+	}
+	if importJSON.SubtitleAPIKey != "" {
+		c.SubtitleAPIKey = importJSON.SubtitleAPIKey
+	}
+	if importJSON.SubtitleUsername != "" {
+		c.SubtitleUsername = importJSON.SubtitleUsername
+	}
+	if importJSON.SubtitlePassword != "" {
+		c.SubtitlePassword = importJSON.SubtitlePassword
+	}
 
 	return nil
 }

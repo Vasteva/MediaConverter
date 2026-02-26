@@ -15,9 +15,9 @@ import (
 
 	"github.com/Vasteva/MediaConverter/internal/ai"
 	"github.com/Vasteva/MediaConverter/internal/ai/meta"
-	"github.com/Vasteva/MediaConverter/internal/ai/whisper"
 	"github.com/Vasteva/MediaConverter/internal/config"
 	"github.com/Vasteva/MediaConverter/internal/media"
+	"github.com/Vasteva/MediaConverter/internal/subtitles"
 )
 
 type Status string
@@ -113,6 +113,12 @@ type Manager struct {
 	OnJobComplete func(*Job)
 	OnJobUpdate   func(*Job)
 	jobsFilePath  string
+	loadErr       string // non-empty if jobs.json existed but could not be parsed
+}
+
+// LoadError returns the error message from the initial jobs file load, if any.
+func (m *Manager) LoadError() string {
+	return m.loadErr
 }
 
 func NewManager(cfg *config.Config, aiProvider ai.Provider, jobsFilePath string) (*Manager, error) {
@@ -140,7 +146,8 @@ func NewManager(cfg *config.Config, aiProvider ai.Provider, jobsFilePath string)
 
 	// Load existing jobs from disk
 	if err := m.Load(); err != nil && !os.IsNotExist(err) {
-		log.Printf("Warning: Could not load existing jobs: %v", err)
+		log.Printf("ERROR: Could not load existing jobs from %s: %v (queue will start empty)", jobsFilePath, err)
+		m.loadErr = err.Error()
 	}
 
 	return m, nil
@@ -556,18 +563,29 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 
 	log.Printf("[Job %s] Transcoding completed successfully", job.ID)
 
-	// 3. Premium Feature: AI Whisper Subtitles
-	if m.config.IsPremium && createSubtitles && m.ai != nil {
-		log.Printf("[Premium] Running Whisper subtitle generation...")
-		generator := whisper.NewGenerator(m.ai)
-		if srtPath, sErr := generator.GenerateSRT(job.ctx, destPath); sErr != nil {
-			log.Printf("Warning: Whisper subtitle generation failed: %v", sErr)
-			// Don't fail the whole job just because subtitles failed
+	// 3. Subtitle Download
+	subtitleMode := m.config.SubtitleMode
+	shouldDownload := subtitleMode == "always" || (subtitleMode == "selective" && createSubtitles)
+	if shouldDownload && m.config.SubtitleAPIKey != "" {
+		log.Printf("[Subtitles] Attempting subtitle download for: %s", filepath.Base(destPath))
+		dl := subtitles.NewDownloader(
+			m.config.SubtitleAPIKey,
+			m.config.SubtitleUsername,
+			m.config.SubtitlePassword,
+			m.config.SubtitleLang,
+		)
+		if srtContent, sErr := dl.Download(job.ctx, destPath); sErr != nil {
+			log.Printf("Warning: Subtitle download failed: %v", sErr)
 		} else {
-			log.Printf("[Premium] Subtitles generated: %s", srtPath)
-			m.updateJob(job, func(j *Job) {
-				j.AISubtitles = true
-			})
+			srtPath := strings.TrimSuffix(destPath, filepath.Ext(destPath)) + ".srt"
+			if wErr := os.WriteFile(srtPath, []byte(srtContent), 0644); wErr != nil {
+				log.Printf("Warning: Failed to save SRT file: %v", wErr)
+			} else {
+				log.Printf("[Subtitles] Saved: %s", srtPath)
+				m.updateJob(job, func(j *Job) {
+					j.AISubtitles = true
+				})
+			}
 		}
 	}
 
@@ -598,9 +616,13 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 			})
 		}
 	} else if !verifyOutput {
-		// If verification is disabled, we consider it "safe" to delete if the user explicitly asked for it
-		// (Standard behavior for non-verified delete)
-		verified = true
+		// Verification disabled: still require the output file to exist and be
+		// non-empty before allowing source deletion, to guard against silent failures.
+		if info, statErr := os.Stat(destPath); statErr == nil && info.Size() > 0 {
+			verified = true
+		} else {
+			log.Printf("[Job %s] WARNING: deleteSource requested but output file is missing or empty: %s", job.ID, destPath)
+		}
 	}
 
 	// 5. Delete Source (Safe Delete)

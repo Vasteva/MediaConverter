@@ -66,10 +66,20 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 
 	setup.Post("/complete", func(c *fiber.Ctx) error {
 		var req struct {
-			AdminPassword string `json:"adminPassword"`
-			AIProvider    string `json:"aiProvider"`
-			AIApiKey      string `json:"aiApiKey"`
-			LicenseKey    string `json:"licenseKey"`
+			AdminPassword    string `json:"adminPassword"`
+			AIProvider       string `json:"aiProvider"`
+			AIApiKey         string `json:"aiApiKey"`
+			AIEndpoint       string `json:"aiEndpoint"`
+			AIModel          string `json:"aiModel"`
+			LicenseKey       string `json:"licenseKey"`
+			GPUVendor        string `json:"gpuVendor"`
+			QualityPreset    string `json:"qualityPreset"`
+			CRF              int    `json:"crf"`
+			SubtitleMode     string `json:"subtitleMode"`
+			SubtitleLang     string `json:"subtitleLang"`
+			SubtitleAPIKey   string `json:"subtitleApiKey"`
+			SubtitleUsername string `json:"subtitleUsername"`
+			SubtitlePassword string `json:"subtitlePassword"`
 		}
 		if err := c.BodyParser(&req); err != nil {
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
@@ -84,9 +94,39 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		if req.AIApiKey != "" {
 			cfg.AIApiKey = req.AIApiKey
 		}
+		if req.AIEndpoint != "" {
+			cfg.AIEndpoint = req.AIEndpoint
+		}
+		if req.AIModel != "" {
+			cfg.AIModel = req.AIModel
+		}
 		if req.LicenseKey != "" {
 			cfg.LicenseKey = req.LicenseKey
 			cfg.IsPremium = license.Validate(req.LicenseKey)
+		}
+		if req.GPUVendor != "" {
+			cfg.GPUVendor = req.GPUVendor
+		}
+		if req.QualityPreset != "" {
+			cfg.QualityPreset = req.QualityPreset
+		}
+		if req.CRF != 0 {
+			cfg.CRF = req.CRF
+		}
+		if req.SubtitleMode != "" {
+			cfg.SubtitleMode = req.SubtitleMode
+		}
+		if req.SubtitleLang != "" {
+			cfg.SubtitleLang = req.SubtitleLang
+		}
+		if req.SubtitleAPIKey != "" {
+			cfg.SubtitleAPIKey = req.SubtitleAPIKey
+		}
+		if req.SubtitleUsername != "" {
+			cfg.SubtitleUsername = req.SubtitleUsername
+		}
+		if req.SubtitlePassword != "" {
+			cfg.SubtitlePassword = req.SubtitlePassword
 		}
 
 		if err := cfg.Save(); err != nil {
@@ -99,6 +139,46 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		}
 
 		return c.JSON(fiber.Map{"success": true})
+	})
+
+	setup.Post("/test-ai", func(c *fiber.Ctx) error {
+		var req struct {
+			Provider string `json:"provider"`
+			APIKey   string `json:"apiKey"`
+			Endpoint string `json:"endpoint"`
+			Model    string `json:"model"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		if req.Provider == "none" || req.Provider == "" {
+			return c.JSON(fiber.Map{"success": true, "message": "AI disabled"})
+		}
+
+		provider, err := ai.NewProvider(ai.AIConfig{
+			Provider: req.Provider,
+			APIKey:   req.APIKey,
+			Endpoint: req.Endpoint,
+			Model:    req.Model,
+		})
+		if err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		ctx, cancel := context.WithTimeout(c.Context(), 10*time.Second)
+		defer cancel()
+
+		resp, err := provider.Analyze(ctx, "Reply with 'OK' if you can receive this message.")
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": fmt.Sprintf("Connection failed: %v", err)})
+		}
+
+		return c.JSON(fiber.Map{
+			"success": true,
+			"message": "Connection successful!",
+			"reply":   resp,
+		})
 	})
 
 	// Initialize rate limiter for login
@@ -184,6 +264,13 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 
 	// Health check
 	api.Get("/health", func(c *fiber.Ctx) error {
+		if jm != nil && jm.LoadError() != "" {
+			return c.Status(500).JSON(fiber.Map{
+				"status": "degraded",
+				"time":   time.Now(),
+				"error":  "Failed to load jobs from disk: " + jm.LoadError(),
+			})
+		}
 		return c.JSON(fiber.Map{"status": "ok", "time": time.Now()})
 	})
 
@@ -211,14 +298,6 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		}
 		if err := c.BodyParser(&req); err != nil {
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
-		}
-
-		// Subtitle generation is only supported with OpenAI (Whisper API).
-		// Surface this early so the user gets a clear error instead of a runtime failure.
-		if req.CreateSubtitles && cfg.AIProvider != "openai" {
-			return c.Status(400).JSON(fiber.Map{
-				"error": fmt.Sprintf("subtitle generation requires the OpenAI provider (current provider: %q)", cfg.AIProvider),
-			})
 		}
 
 		// Security: Validate paths to prevent arbitrary file access
@@ -288,35 +367,49 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 
 	// Config
 	api.Get("/config", func(c *fiber.Ctx) error {
+		subtitleAPIKey := ""
+		if cfg.SubtitleAPIKey != "" {
+			subtitleAPIKey = security.MaskKey(cfg.SubtitleAPIKey)
+		}
 		return c.JSON(fiber.Map{
-			"sourceDir":     cfg.SourceDir,
-			"destDir":       cfg.DestDir,
-			"gpuVendor":     cfg.GPUVendor,
-			"qualityPreset": cfg.QualityPreset,
-			"crf":           cfg.CRF,
-			"aiProvider":    cfg.AIProvider,
-			"aiApiKey":      security.MaskKey(cfg.AIApiKey),
-			"aiEndpoint":    cfg.AIEndpoint,
-			"aiModel":       cfg.AIModel,
-			"licenseKey":    security.MaskKey(cfg.LicenseKey),
-			"isPremium":     cfg.IsPremium,
-			"planName":      license.GetPlanName(cfg.LicenseKey),
-			"verifyOutput":  cfg.VerifyOutput,
-			"deleteSource":  cfg.DeleteSource,
+			"sourceDir":        cfg.SourceDir,
+			"destDir":          cfg.DestDir,
+			"gpuVendor":        cfg.GPUVendor,
+			"qualityPreset":    cfg.QualityPreset,
+			"crf":              cfg.CRF,
+			"aiProvider":       cfg.AIProvider,
+			"aiApiKey":         security.MaskKey(cfg.AIApiKey),
+			"aiEndpoint":       cfg.AIEndpoint,
+			"aiModel":          cfg.AIModel,
+			"licenseKey":       security.MaskKey(cfg.LicenseKey),
+			"isPremium":        cfg.IsPremium,
+			"planName":         license.GetPlanName(cfg.LicenseKey),
+			"verifyOutput":     cfg.VerifyOutput,
+			"deleteSource":     cfg.DeleteSource,
+			"subtitleMode":        cfg.SubtitleMode,
+			"subtitleLang":        cfg.SubtitleLang,
+			"subtitleApiKey":      subtitleAPIKey,
+			"subtitleUsername":    cfg.SubtitleUsername,
+			"subtitlePasswordSet": cfg.SubtitlePassword != "",
 		})
 	})
 
 	api.Post("/config", func(c *fiber.Ctx) error {
 		var req struct {
-			QualityPreset string `json:"qualityPreset"`
-			CRF           int    `json:"crf"`
-			AIProvider    string `json:"aiProvider"`
-			AIApiKey      string `json:"aiApiKey"`
-			AIEndpoint    string `json:"aiEndpoint"`
-			AIModel       string `json:"aiModel"`
-			LicenseKey    string `json:"licenseKey"`
-			VerifyOutput  *bool  `json:"verifyOutput"`
-			DeleteSource  *bool  `json:"deleteSource"`
+			QualityPreset    string `json:"qualityPreset"`
+			CRF              *int   `json:"crf"`
+			AIProvider       string `json:"aiProvider"`
+			AIApiKey         string `json:"aiApiKey"`
+			AIEndpoint       string `json:"aiEndpoint"`
+			AIModel          string `json:"aiModel"`
+			LicenseKey       string `json:"licenseKey"`
+			VerifyOutput     *bool  `json:"verifyOutput"`
+			DeleteSource     *bool  `json:"deleteSource"`
+			SubtitleMode     string `json:"subtitleMode"`
+			SubtitleLang     string `json:"subtitleLang"`
+			SubtitleAPIKey   string `json:"subtitleApiKey"`
+			SubtitleUsername string `json:"subtitleUsername"`
+			SubtitlePassword string `json:"subtitlePassword"`
 		}
 		if err := c.BodyParser(&req); err != nil {
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
@@ -326,11 +419,11 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		if req.QualityPreset != "" {
 			cfg.QualityPreset = req.QualityPreset
 		}
-		if req.CRF != 0 {
-			if req.CRF < 0 || req.CRF > 51 {
+		if req.CRF != nil {
+			if *req.CRF < 0 || *req.CRF > 51 {
 				return c.Status(400).JSON(fiber.Map{"error": "CRF must be between 0 and 51"})
 			}
-			cfg.CRF = req.CRF
+			cfg.CRF = *req.CRF
 		}
 		if req.AIProvider != "" {
 			cfg.AIProvider = req.AIProvider
@@ -358,6 +451,23 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		}
 		if req.DeleteSource != nil {
 			cfg.DeleteSource = *req.DeleteSource
+		}
+
+		// Subtitle settings
+		if req.SubtitleMode != "" {
+			cfg.SubtitleMode = req.SubtitleMode
+		}
+		if req.SubtitleLang != "" {
+			cfg.SubtitleLang = req.SubtitleLang
+		}
+		if req.SubtitleAPIKey != "" && !strings.Contains(req.SubtitleAPIKey, "....") {
+			cfg.SubtitleAPIKey = req.SubtitleAPIKey
+		}
+		if req.SubtitleUsername != "" {
+			cfg.SubtitleUsername = req.SubtitleUsername
+		}
+		if req.SubtitlePassword != "" {
+			cfg.SubtitlePassword = req.SubtitlePassword
 		}
 
 		// Re-initialize AI provider in manager
@@ -502,6 +612,12 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		}()
 
 		return c.JSON(fiber.Map{"success": true, "message": "Scan started"})
+	})
+
+	// SSE short-lived token exchange (bug #26 mitigation)
+	// Issues a 2-minute token so the long-lived session token never appears in server access logs.
+	api.Post("/events/token", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"token": GenerateSSEToken(cfg.AdminPassword)})
 	})
 
 	// AI Search

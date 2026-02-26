@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, Fragment } from 'react';
 import type { SystemConfig } from '../types';
 
 interface SettingsProps {
@@ -13,6 +13,7 @@ export default function Settings({ config: initialConfig, onConfigUpdate, token 
     const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
     const [testMessage, setTestMessage] = useState('');
     const [saveError, setSaveError] = useState<string | null>(null);
+    const [subtitlePassword, setSubtitlePassword] = useState('');
 
     const testStatusRef = useRef(testStatus);
     useEffect(() => {
@@ -190,7 +191,7 @@ export default function Settings({ config: initialConfig, onConfigUpdate, token 
                                 <p className="text-xs text-secondary mt-2">
                                     {isPremium
                                         ? "✅ Your Pro license is active. Thank you for supporting Vastiva!"
-                                        : "Enter your Pro license key to unlock AI-Adaptive Encoding, Whisper Subtitles, and Smart Metadata."}
+                                        : "Enter your Pro license key to unlock AI-Adaptive Encoding and Smart Metadata."}
                                 </p>
                             </div>
 
@@ -342,6 +343,104 @@ export default function Settings({ config: initialConfig, onConfigUpdate, token 
                         <p className="text-sm text-secondary">
                             <strong>Pro Tip:</strong> Using a local model with <strong>Ollama</strong> or a fast cloud model like <strong>Gemini Flash</strong> is recommended for real-time media analysis.
                         </p>
+                    </div>
+                </div>
+            </div>
+
+            {/* Subtitles */}
+            <div className="card mt-4">
+                <div className="card-header">
+                    <h3 className="card-title">Subtitles</h3>
+                </div>
+                <div className="card-body">
+                    <div className="grid grid-2 gap-4">
+                        <div className="setting-item">
+                            <label className="setting-label">Download Mode</label>
+                            <select
+                                className="input select"
+                                value={config.subtitleMode || 'selective'}
+                                onChange={e => handleSave({ subtitleMode: e.target.value as SystemConfig['subtitleMode'] })}
+                                disabled={isSaving}
+                            >
+                                <option value="always">Always — download for every job</option>
+                                <option value="selective">Per Job — choose per conversion</option>
+                                <option value="never">Disabled — no subtitle downloads</option>
+                            </select>
+                        </div>
+
+                        <div className="setting-item">
+                            <label className="setting-label">Preferred Language</label>
+                            <input
+                                type="text"
+                                className="input"
+                                value={config.subtitleLang || 'en'}
+                                onChange={e => setConfig({ ...config, subtitleLang: e.target.value })}
+                                onBlur={e => handleSave({ subtitleLang: e.target.value })}
+                                disabled={isSaving}
+                                placeholder="en"
+                                maxLength={10}
+                            />
+                            <span className="text-xs text-secondary mt-1">ISO 639-1 — e.g. en, fr, de, es, ja</span>
+                        </div>
+
+                        {config.subtitleMode !== 'never' && (
+                            <Fragment>
+                                <div className="setting-item" style={{ gridColumn: '1 / -1' }}>
+                                    <div className="p-3 bg-tertiary rounded-lg border border-border text-sm text-secondary">
+                                        <strong className="text-primary block mb-1">How to get an OpenSubtitles API key:</strong>
+                                        <ol style={{ paddingLeft: '1.2rem', lineHeight: '1.8' }}>
+                                            <li>Create a free account at <strong>opensubtitles.com</strong></li>
+                                            <li>Go to your profile &rarr; <strong>API Consumers</strong></li>
+                                            <li>Click <strong>Add new consumer</strong>, give it a name, and save</li>
+                                            <li>Copy the generated API key below</li>
+                                        </ol>
+                                        <span className="text-xs">Free accounts: 20 downloads/day. Upgrade to VIP for more.</span>
+                                    </div>
+                                </div>
+
+                                <div className="setting-item">
+                                    <label className="setting-label">OpenSubtitles API Key</label>
+                                    <input
+                                        type="password"
+                                        className="input"
+                                        value={config.subtitleApiKey || ''}
+                                        placeholder="Paste your API key"
+                                        onChange={e => setConfig({ ...config, subtitleApiKey: e.target.value })}
+                                        onBlur={e => handleSave({ subtitleApiKey: e.target.value })}
+                                        disabled={isSaving}
+                                    />
+                                </div>
+
+                                <div className="setting-item">
+                                    <label className="setting-label">Username <span className="text-xs text-secondary">(optional)</span></label>
+                                    <input
+                                        type="text"
+                                        className="input"
+                                        value={config.subtitleUsername || ''}
+                                        placeholder="opensubtitles.com username"
+                                        onChange={e => setConfig({ ...config, subtitleUsername: e.target.value })}
+                                        onBlur={e => handleSave({ subtitleUsername: e.target.value })}
+                                        disabled={isSaving}
+                                        autoComplete="off"
+                                    />
+                                </div>
+
+                                <div className="setting-item">
+                                    <label className="setting-label">Password <span className="text-xs text-secondary">(optional)</span></label>
+                                    <input
+                                        type="password"
+                                        className="input"
+                                        value={subtitlePassword}
+                                        placeholder={config.subtitlePasswordSet && !subtitlePassword ? "Password saved — enter new value to change" : "opensubtitles.com password"}
+                                        onChange={e => setSubtitlePassword(e.target.value)}
+                                        onBlur={e => { if (e.target.value) handleSave({ subtitlePassword: e.target.value }); }}
+                                        disabled={isSaving}
+                                        autoComplete="new-password"
+                                    />
+                                    <span className="text-xs text-secondary mt-1">Logging in increases your daily download quota.</span>
+                                </div>
+                            </Fragment>
+                        )}
                     </div>
                 </div>
             </div>

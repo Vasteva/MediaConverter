@@ -19,7 +19,7 @@ func AuthMiddleware(cfg *config.Config) fiber.Handler {
 		}
 
 		// If not initialized, allow all setup routes
-		if !cfg.IsInitialized && (path == "/api/setup/probes" || path == "/api/setup/complete") {
+		if !cfg.IsInitialized && (path == "/api/setup/probes" || path == "/api/setup/complete" || path == "/api/setup/test-ai") {
 			return c.Next()
 		}
 
@@ -54,6 +54,29 @@ func GenerateToken(password string) string {
 	salt := time.Now().Format("2006-01-02")
 	hash := sha256.Sum256([]byte(password + salt))
 	return fmt.Sprintf("%x", hash)
+}
+
+// GenerateSSEToken creates a short-lived token for SSE connections.
+// The token is valid for up to 2 minutes, limiting its exposure in server access logs.
+func GenerateSSEToken(password string) string {
+	minute := time.Now().Unix() / 60
+	hash := sha256.Sum256([]byte(fmt.Sprintf("sse:%s:%d", password, minute)))
+	return fmt.Sprintf("%x", hash)
+}
+
+// validateSSEToken accepts tokens generated within the current or previous minute.
+func validateSSEToken(token, password string) bool {
+	if password == "" {
+		return false
+	}
+	now := time.Now().Unix() / 60
+	for _, minute := range []int64{now, now - 1} {
+		hash := sha256.Sum256([]byte(fmt.Sprintf("sse:%s:%d", password, minute)))
+		if token == fmt.Sprintf("%x", hash) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateToken(token, password string) bool {
