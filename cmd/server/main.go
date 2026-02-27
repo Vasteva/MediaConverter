@@ -123,6 +123,7 @@ func main() {
 			return c.SendStatus(http.StatusNotFound)
 		}
 		c.Set("Content-Type", "text/html")
+		c.Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		return c.Send(file)
 	})
 
