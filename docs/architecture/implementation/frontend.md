@@ -144,21 +144,21 @@ interface SettingsProps {
 
 ## 📋 Implementation Checklist
 
-### Phase 1: Core Functionality ✅ (Partially Complete)
+### Phase 1: Core Functionality ✅ (Complete)
 - [x] Design system with light/dark themes
 - [x] Main App structure
 - [x] Header with navigation
 - [x] API integration setup
 - [x] Theme switching
-- [ ] Dashboard component
-- [ ] Job list component
-- [ ] Job creation modal
-- [ ] Scanner config component
-- [ ] Settings component
+- [x] Dashboard component
+- [x] Job list component (with AI log expansion, sort/filter)
+- [x] Job creation modal
+- [x] Scanner config component (with sort/filter for discovered files)
+- [x] Settings component (AI config, processing schedule)
 
 ### Phase 2: Enhanced Features
-- [ ] Real-time WebSocket updates (instead of polling)
-- [ ] Job filtering and sorting
+- [x] Real-time SSE updates (EventSource replacing polling)
+- [x] Job filtering (by status: all/active/completed/failed)
 - [ ] Job search
 - [ ] Bulk job actions
 - [ ] Job templates

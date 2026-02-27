@@ -156,6 +156,7 @@ AI_MODEL=claude-3-opus-20240229
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| `POST` | `/api/login` | Authenticate and receive session token |
 | `GET` | `/api/health` | Health check |
 | `GET` | `/api/stats` | System statistics |
 | `GET` | `/api/dashboard/stats` | AI insights and analytics |
@@ -164,8 +165,13 @@ AI_MODEL=claude-3-opus-20240229
 | `DELETE` | `/api/jobs/:id` | Cancel job |
 | `GET` | `/api/config` | Get system configuration |
 | `POST` | `/api/config` | Update configuration |
+| `GET` | `/api/browse` | Browse server filesystem |
 | `GET` | `/api/scanner/config` | Get scanner settings |
-| `POST` | `/api/scanner/config` | Update scanner |
+| `POST` | `/api/scanner/config` | Update scanner settings |
+| `GET` | `/api/scanner/discover` | List discovered files pending queue |
+| `POST` | `/api/scanner/queue` | Queue selected discovered files |
+| `POST` | `/api/events/token` | Exchange session token for short-lived SSE token |
+| `GET` | `/api/events` | SSE stream for real-time job updates |
 | `GET` | `/api/search?q=query` | Natural language search |
 
 ## 🔒 Security

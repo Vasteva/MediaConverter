@@ -85,10 +85,10 @@ The system follows a clear, modular architecture with distinct layers:
 - 🟡 useEffect Dependency Warnings: React hook dependency issues
 - 🔴 Roadmap Items:
   - [ ] Multi-user support (single admin only)
-  - [ ] Advanced scheduling (job scheduling by time/day)
+  - [x] Advanced scheduling (job scheduling by time/day) ✅ Resolved (2026-02-27)
   - [ ] Webhook notifications (external service notifications)
-- 🟡 MakeMKV Not Installed in Docker Image: Documentation gap
-- 🟡 Scanner Config Persistence: Volume mounting requirement documentation
+- 🟡 MakeMKV Not Installed in Docker Image: ✅ Resolved
+- 🟡 Scanner Config Persistence: ✅ Resolved
 
 ## Documentation Quality
 

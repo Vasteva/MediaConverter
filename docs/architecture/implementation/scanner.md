@@ -382,8 +382,8 @@ SCANNER_INTERVAL_SEC=300
 ## Future Enhancements
 
 ### Planned Features
-- [ ] API endpoints for scanner control
-- [ ] Web UI for watch directory management
+- [x] API endpoints for scanner control
+- [x] Web UI for watch directory management (sort/filter, queue selection)
 - [ ] Scanner statistics and metrics
 - [ ] Custom job priority based on directory
 - [ ] File move/rename detection
