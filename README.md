@@ -253,9 +253,8 @@ All documentation is organized in the [`docs/`](docs/) folder:
 - [x] Natural language search
 - [x] AI-enhanced dashboard
 - [x] CI/CD pipeline
-- [ ] Multi-user support
-- [ ] Advanced scheduling
-- [ ] Webhook notifications
+- [x] **Advanced scheduling**
+- [x] **Per-job AI logging**
 
 ## 📄 License
 
