@@ -745,6 +745,134 @@ func (s *Scanner) periodicScan() {
 	}
 }
 
+// DiscoveredFile represents a file found during a discovery scan
+type DiscoveredFile struct {
+	Path                 string  `json:"path"`
+	Name                 string  `json:"name"`
+	SizeBytes            int64   `json:"sizeBytes"`
+	Extension            string  `json:"extension"`
+	JobType              string  `json:"jobType"` // "optimize" or "extract"
+	EstimatedOutputBytes int64   `json:"estimatedOutputBytes"`
+	EstimatedSavingsBytes int64  `json:"estimatedSavingsBytes"`
+	EstimatedSavingsPct  float64 `json:"estimatedSavingsPct"`
+}
+
+// Discover scans all watch directories and returns files that would be processed,
+// without creating any jobs.
+func (s *Scanner) Discover() ([]DiscoveredFile, error) {
+	s.mu.RLock()
+	watchDirs := s.config.WatchDirectories
+	s.mu.RUnlock()
+
+	var result []DiscoveredFile
+
+	for _, watchDir := range watchDirs {
+		files, err := s.scanDirectory(watchDir)
+		if err != nil {
+			log.Printf("[Scanner] Discover: error scanning %s: %v", watchDir.Path, err)
+			continue
+		}
+
+		for _, path := range files {
+			if !s.shouldProcessFile(path, watchDir) {
+				continue
+			}
+
+			info, err := os.Stat(path)
+			if err != nil {
+				continue
+			}
+
+			ext := strings.ToLower(filepath.Ext(path))
+			var jobType string
+			if s.containsExtension(s.config.ExtractExtensions, ext) {
+				jobType = "extract"
+			} else if s.containsExtension(s.config.OptimizeExtensions, ext) {
+				jobType = "optimize"
+			} else {
+				continue
+			}
+
+			estimatedOutput, pct := estimateSavings(ext, info.Size())
+
+			result = append(result, DiscoveredFile{
+				Path:                  path,
+				Name:                  filepath.Base(path),
+				SizeBytes:             info.Size(),
+				Extension:             ext,
+				JobType:               jobType,
+				EstimatedOutputBytes:  estimatedOutput,
+				EstimatedSavingsBytes: info.Size() - estimatedOutput,
+				EstimatedSavingsPct:   pct,
+			})
+		}
+	}
+
+	return result, nil
+}
+
+// QueueFile creates a job for a specific file path, bypassing AutoCreateJobs.
+func (s *Scanner) QueueFile(path string) error {
+	s.mu.RLock()
+	cfg := s.config
+	s.mu.RUnlock()
+
+	ext := strings.ToLower(filepath.Ext(path))
+	var jobType jobs.JobType
+
+	if s.containsExtension(cfg.ExtractExtensions, ext) {
+		jobType = jobs.JobTypeExtract
+	} else if s.containsExtension(cfg.OptimizeExtensions, ext) {
+		jobType = jobs.JobTypeOptimize
+	} else {
+		return fmt.Errorf("unsupported extension: %s", ext)
+	}
+
+	outputPath := s.generateOutputPath(path, jobType)
+
+	job := &jobs.Job{
+		ID:              util.GenerateID(),
+		Type:            jobType,
+		SourcePath:      path,
+		DestinationPath: outputPath,
+		Status:          jobs.StatusPending,
+		Priority:        cfg.DefaultPriority,
+		CreateSubtitles: cfg.AutoCreateSubtitles,
+		Upscale:         cfg.AutoUpscale,
+		Resolution:      cfg.AutoResolution,
+		CreatedAt:       time.Now(),
+	}
+
+	s.jobManager.AddJob(job)
+
+	s.processedDB.MarkProcessed(ProcessedFile{
+		Path:    path,
+		JobID:   job.ID,
+		JobType: string(jobType),
+	})
+
+	log.Printf("[Scanner] Queued %s job %s for %s", jobType, job.ID, path)
+	return nil
+}
+
+// estimateSavings estimates the output file size and savings % based on file extension.
+func estimateSavings(ext string, sizeBytes int64) (estimatedOutput int64, pct float64) {
+	switch ext {
+	case ".avi", ".wmv", ".mpg", ".mpeg", ".flv":
+		pct = 55
+	case ".mkv", ".mp4", ".m4v", ".mov":
+		pct = 40
+	case ".webm":
+		pct = 15
+	case ".iso", ".img", ".mdf":
+		return sizeBytes, 0 // extraction operation, not compression
+	default:
+		pct = 35
+	}
+	estimatedOutput = int64(float64(sizeBytes) * (1 - pct/100))
+	return estimatedOutput, pct
+}
+
 // isInDirectory checks if a path is within a directory
 func (s *Scanner) isInDirectory(path, dir string) bool {
 	rel, err := filepath.Rel(dir, path)

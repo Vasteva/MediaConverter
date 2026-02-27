@@ -614,6 +614,41 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		return c.JSON(fiber.Map{"success": true, "message": "Scan started"})
 	})
 
+	// Discover files without creating jobs
+	api.Get("/scanner/discover", func(c *fiber.Ctx) error {
+		if fs == nil {
+			return c.Status(503).JSON(fiber.Map{"error": "Scanner not initialized"})
+		}
+		files, err := fs.Discover()
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
+		return c.JSON(fiber.Map{"files": files})
+	})
+
+	// Queue specific files by path
+	api.Post("/scanner/queue", func(c *fiber.Ctx) error {
+		if fs == nil {
+			return c.Status(503).JSON(fiber.Map{"error": "Scanner not initialized"})
+		}
+		var req struct {
+			Paths []string `json:"paths"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "Invalid request body"})
+		}
+		queued := 0
+		var errs []string
+		for _, path := range req.Paths {
+			if err := fs.QueueFile(path); err != nil {
+				errs = append(errs, fmt.Sprintf("%s: %v", filepath.Base(path), err))
+			} else {
+				queued++
+			}
+		}
+		return c.JSON(fiber.Map{"queued": queued, "errors": errs})
+	})
+
 	// SSE short-lived token exchange (bug #26 mitigation)
 	// Issues a 2-minute token so the long-lived session token never appears in server access logs.
 	api.Post("/events/token", func(c *fiber.Ctx) error {

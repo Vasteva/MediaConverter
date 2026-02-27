@@ -2,6 +2,25 @@ import { useState, useEffect } from 'react';
 import FileBrowserModal from './FileBrowserModal';
 import type { ScannerConfig, WatchDirectory } from '../types';
 
+interface DiscoveredFile {
+    path: string;
+    name: string;
+    sizeBytes: number;
+    extension: string;
+    jobType: 'optimize' | 'extract';
+    estimatedOutputBytes: number;
+    estimatedSavingsBytes: number;
+    estimatedSavingsPct: number;
+}
+
+function formatBytes(bytes: number): string {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+}
+
 interface ScannerConfigProps {
     config: ScannerConfig;
     onSave: (config: ScannerConfig) => Promise<boolean>;
@@ -29,6 +48,11 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
     const [newDir, setNewDir] = useState('');
     const [showFileBrowser, setShowFileBrowser] = useState(false);
     const [scanStatus, setScanStatus] = useState<ScanStatus | null>(null);
+    const [discoveredFiles, setDiscoveredFiles] = useState<DiscoveredFile[] | null>(null);
+    const [isDiscovering, setIsDiscovering] = useState(false);
+    const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+    const [isQueuing, setIsQueuing] = useState(false);
+    const [queueResult, setQueueResult] = useState<string | null>(null);
 
     useEffect(() => {
         const fetchStatus = async () => {
@@ -87,6 +111,71 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
         const newDirs = [...config.watchDirectories];
         newDirs.splice(index, 1);
         setConfig({ ...config, watchDirectories: newDirs });
+    };
+
+    const handleDiscover = async () => {
+        setIsDiscovering(true);
+        setDiscoveredFiles(null);
+        setSelectedPaths(new Set());
+        setQueueResult(null);
+        try {
+            const token = sessionStorage.getItem('token');
+            const res = await fetch('/api/scanner/discover', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (!res.ok) throw new Error(`Error: ${res.statusText}`);
+            const data = await res.json();
+            setDiscoveredFiles(data.files || []);
+        } catch (e) {
+            setDiscoveredFiles([]);
+            alert('Discovery failed: ' + (e instanceof Error ? e.message : String(e)));
+        } finally {
+            setIsDiscovering(false);
+        }
+    };
+
+    const handleQueueSelected = async () => {
+        if (selectedPaths.size === 0) return;
+        setIsQueuing(true);
+        setQueueResult(null);
+        try {
+            const token = sessionStorage.getItem('token');
+            const res = await fetch('/api/scanner/queue', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ paths: Array.from(selectedPaths) })
+            });
+            const data = await res.json();
+            setQueueResult(`${data.queued} job${data.queued !== 1 ? 's' : ''} added to queue`);
+            // Remove queued files from discovery results
+            setDiscoveredFiles(prev => prev?.filter(f => !selectedPaths.has(f.path)) ?? null);
+            setSelectedPaths(new Set());
+        } catch (e) {
+            alert('Queue failed: ' + (e instanceof Error ? e.message : String(e)));
+        } finally {
+            setIsQueuing(false);
+        }
+    };
+
+    const toggleSelectAll = () => {
+        if (!discoveredFiles) return;
+        if (selectedPaths.size === discoveredFiles.length) {
+            setSelectedPaths(new Set());
+        } else {
+            setSelectedPaths(new Set(discoveredFiles.map(f => f.path)));
+        }
+    };
+
+    const toggleSelect = (path: string) => {
+        setSelectedPaths(prev => {
+            const next = new Set(prev);
+            if (next.has(path)) next.delete(path);
+            else next.add(path);
+            return next;
+        });
     };
 
     return (
@@ -334,49 +423,169 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
                 </div>
             </div>
 
-            <div className="flex justify-end mt-4">
+            <div className="flex justify-end mt-4" style={{ gap: '0.75rem' }}>
+                <button
+                    type="button"
+                    className="btn btn-secondary btn-lg"
+                    onClick={() => {
+                        if (scanStatus) {
+                            setScanStatus({ ...scanStatus, isScanning: true, currentPath: 'Starting...' });
+                        }
+                        fetch('/api/scanner/scan', {
+                            method: 'POST',
+                            headers: { 'Authorization': `Bearer ${sessionStorage.getItem('token')}` }
+                        })
+                            .then(res => { if (!res.ok) alert('Failed to start scan'); })
+                            .catch(err => alert('Error starting scan: ' + err.message));
+                    }}
+                    disabled={scanStatus?.isScanning}
+                >
+                    {scanStatus?.isScanning ? 'Scanning...' : 'Scan Now'}
+                </button>
+                <button
+                    type="button"
+                    className="btn btn-secondary btn-lg"
+                    onClick={handleDiscover}
+                    disabled={isDiscovering || scanStatus?.isScanning}
+                >
+                    {isDiscovering ? (
+                        <><div className="spinner" style={{ width: '16px', height: '16px', borderWidth: '2px' }} /> Discovering...</>
+                    ) : 'Discover Files'}
+                </button>
                 <button
                     className="btn btn-primary btn-lg"
                     onClick={handleSave}
                     disabled={isSaving}
                 >
                     {isSaving ? (
-                        <>
-                            <div className="spinner" style={{ width: '16px', height: '16px', borderWidth: '2px' }} />
-                            Saving...
-                        </>
-                    ) : (
-                        'Save Configuration'
-                    )}
-                </button>
-                <button
-                    type="button"
-                    className="btn btn-secondary btn-lg"
-                    onClick={() => {
-                        // Optimistic update
-                        if (scanStatus) {
-                            setScanStatus({ ...scanStatus, isScanning: true, currentPath: 'Starting...' });
-                        }
-                        fetch('/api/scanner/scan', {
-                            method: 'POST',
-                            headers: {
-                                'Authorization': `Bearer ${sessionStorage.getItem('token')}`
-                            }
-                        })
-                            .then(res => {
-                                if (!res.ok) {
-                                    alert('Failed to start scan');
-                                    // Revert optimistic update nicely via next poll, but we can also unset locally if we want
-                                }
-                            })
-                            .catch(err => alert('Error starting scan: ' + err.message));
-                    }}
-                    disabled={scanStatus?.isScanning}
-                    style={{ marginRight: '1rem' }}
-                >
-                    {scanStatus?.isScanning ? 'Scanning...' : 'Scan Now'}
+                        <><div className="spinner" style={{ width: '16px', height: '16px', borderWidth: '2px' }} /> Saving...</>
+                    ) : 'Save Configuration'}
                 </button>
             </div>
+
+            {/* Discovery Results */}
+            {discoveredFiles !== null && (
+                <div className="card mt-6">
+                    <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                            <h3 className="card-title">Discovered Files</h3>
+                            <p className="text-secondary text-sm mt-1">
+                                {discoveredFiles.length === 0
+                                    ? 'No new files found'
+                                    : `${discoveredFiles.length} file${discoveredFiles.length !== 1 ? 's' : ''} ready to queue · ${selectedPaths.size} selected`}
+                            </p>
+                        </div>
+                        {discoveredFiles.length > 0 && (
+                            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                                <button className="btn btn-secondary" onClick={toggleSelectAll}>
+                                    {selectedPaths.size === discoveredFiles.length ? 'Deselect All' : 'Select All'}
+                                </button>
+                                <button
+                                    className="btn btn-primary"
+                                    onClick={handleQueueSelected}
+                                    disabled={selectedPaths.size === 0 || isQueuing}
+                                >
+                                    {isQueuing ? (
+                                        <><div className="spinner" style={{ width: '14px', height: '14px', borderWidth: '2px' }} /> Queuing...</>
+                                    ) : `Queue Selected (${selectedPaths.size})`}
+                                </button>
+                            </div>
+                        )}
+                    </div>
+
+                    {queueResult && (
+                        <div style={{ margin: '0 1.5rem', padding: '0.75rem 1rem', background: 'rgba(61, 217, 208, 0.1)', color: 'var(--brand-teal)', borderRadius: '8px', border: '1px solid var(--brand-teal)', fontSize: '0.9rem' }}>
+                            {queueResult}
+                        </div>
+                    )}
+
+                    {discoveredFiles.length > 0 && (
+                        <div className="card-body" style={{ padding: 0 }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                <thead>
+                                    <tr style={{ background: 'var(--bg-tertiary)' }}>
+                                        <th style={{ width: '48px', padding: '0.75rem 1rem', textAlign: 'center' }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedPaths.size === discoveredFiles.length}
+                                                onChange={toggleSelectAll}
+                                            />
+                                        </th>
+                                        <th style={{ textAlign: 'left', padding: '0.75rem 1rem', fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>File</th>
+                                        <th style={{ width: '80px', textAlign: 'center', padding: '0.75rem 1rem', fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Type</th>
+                                        <th style={{ width: '100px', textAlign: 'right', padding: '0.75rem 1rem', fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Current Size</th>
+                                        <th style={{ width: '120px', textAlign: 'right', padding: '0.75rem 1rem', fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Est. Savings</th>
+                                        <th style={{ width: '160px', padding: '0.75rem 1rem' }}></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {discoveredFiles.map((file) => {
+                                        const isSelected = selectedPaths.has(file.path);
+                                        return (
+                                            <tr
+                                                key={file.path}
+                                                onClick={() => toggleSelect(file.path)}
+                                                style={{
+                                                    cursor: 'pointer',
+                                                    background: isSelected ? 'rgba(61, 217, 208, 0.08)' : 'transparent',
+                                                    borderLeft: isSelected ? '3px solid var(--brand-teal)' : '3px solid transparent',
+                                                    transition: 'background 0.1s'
+                                                }}
+                                            >
+                                                <td style={{ padding: '0.875rem 1rem', textAlign: 'center', borderBottom: '1px solid var(--border-color)' }}>
+                                                    <input type="checkbox" checked={isSelected} onChange={() => toggleSelect(file.path)} onClick={e => e.stopPropagation()} />
+                                                </td>
+                                                <td style={{ padding: '0.875rem 1rem', borderBottom: '1px solid var(--border-color)' }}>
+                                                    <div className="font-medium" style={{ fontSize: '0.9rem' }}>{file.name}</div>
+                                                    <div className="text-secondary" style={{ fontSize: '0.75rem', fontFamily: 'monospace', marginTop: '2px', opacity: 0.7 }}>{file.path}</div>
+                                                </td>
+                                                <td style={{ padding: '0.875rem 1rem', textAlign: 'center', borderBottom: '1px solid var(--border-color)' }}>
+                                                    <span style={{
+                                                        padding: '2px 8px', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 600,
+                                                        background: file.jobType === 'optimize' ? 'rgba(61, 217, 208, 0.15)' : 'rgba(168, 85, 247, 0.15)',
+                                                        color: file.jobType === 'optimize' ? 'var(--brand-teal)' : '#a855f7'
+                                                    }}>
+                                                        {file.jobType}
+                                                    </span>
+                                                </td>
+                                                <td style={{ padding: '0.875rem 1rem', textAlign: 'right', borderBottom: '1px solid var(--border-color)', fontFamily: 'monospace', fontSize: '0.85rem' }}>
+                                                    {formatBytes(file.sizeBytes)}
+                                                </td>
+                                                <td style={{ padding: '0.875rem 1rem', textAlign: 'right', borderBottom: '1px solid var(--border-color)' }}>
+                                                    {file.estimatedSavingsPct > 0 ? (
+                                                        <div>
+                                                            <div style={{ color: 'var(--status-completed)', fontWeight: 600, fontSize: '0.9rem' }}>
+                                                                -{file.estimatedSavingsPct.toFixed(0)}%
+                                                            </div>
+                                                            <div className="text-secondary" style={{ fontSize: '0.75rem', fontFamily: 'monospace' }}>
+                                                                ~{formatBytes(file.estimatedSavingsBytes)} saved
+                                                            </div>
+                                                        </div>
+                                                    ) : (
+                                                        <span className="text-secondary" style={{ fontSize: '0.8rem' }}>N/A</span>
+                                                    )}
+                                                </td>
+                                                <td style={{ padding: '0.875rem 1rem', borderBottom: '1px solid var(--border-color)' }}>
+                                                    {file.estimatedSavingsPct > 0 && (
+                                                        <div style={{ background: 'var(--bg-tertiary)', borderRadius: '4px', height: '6px', overflow: 'hidden' }}>
+                                                            <div style={{
+                                                                height: '100%',
+                                                                width: `${file.estimatedSavingsPct}%`,
+                                                                background: 'var(--brand-teal)',
+                                                                borderRadius: '4px'
+                                                            }} />
+                                                        </div>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+            )}
         </div>
     );
 }
