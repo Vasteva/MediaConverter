@@ -40,6 +40,12 @@
     gap: 20px;
 }
 
+.login-form .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
 .login-error {
     background: rgba(255, 78, 78, 0.1);
     color: #ff4e4e;
