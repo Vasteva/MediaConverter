@@ -494,6 +494,14 @@ a:hover {
   background: var(--bg-hover);
 }
 
+.table tr.job-row-clickable {
+  cursor: pointer;
+}
+
+.table tr.job-row-expanded {
+  background: var(--bg-hover);
+}
+
 /* ===========================
    Utility Classes
    =========================== */

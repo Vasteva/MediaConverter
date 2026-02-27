@@ -128,7 +128,10 @@ export default function JobList({ jobs, onCreateJob, onCancelJob, subtitleMode =
                             ) : (
                                 filteredJobs.map(job => (
                                     <Fragment key={job.id}>
-                                        <tr>
+                                        <tr
+                                            className={`job-row-clickable${expandedJobId === job.id ? ' job-row-expanded' : ''}`}
+                                            onClick={() => setExpandedJobId(expandedJobId === job.id ? null : job.id)}
+                                        >
                                             <td>
                                                 <div className="flex flex-col gap-1">
                                                     <span className={`badge badge-${job.type}`}>
@@ -153,13 +156,30 @@ export default function JobList({ jobs, onCreateJob, onCancelJob, subtitleMode =
                                                 </div>
                                             </td>
                                             <td>
-                                                <div className="flex flex-col">
-                                                    <span style={{ fontFamily: 'monospace', fontSize: '0.8125rem' }} title={job.sourcePath}>
-                                                        {job.sourcePath.split('/').pop()}
-                                                    </span>
-                                                    <span className="text-xs text-secondary" style={{ maxWidth: '300px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                                        {job.sourcePath}
-                                                    </span>
+                                                <div className="flex items-center gap-2">
+                                                    <div className="flex flex-col" style={{ minWidth: 0 }}>
+                                                        <span style={{ fontFamily: 'monospace', fontSize: '0.8125rem' }} title={job.sourcePath}>
+                                                            {job.sourcePath.split('/').pop()}
+                                                        </span>
+                                                        <span className="text-xs text-secondary" style={{ maxWidth: '300px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                                            {job.sourcePath}
+                                                        </span>
+                                                    </div>
+                                                    <svg
+                                                        viewBox="0 0 24 24"
+                                                        fill="none"
+                                                        stroke="currentColor"
+                                                        style={{
+                                                            width: '14px',
+                                                            height: '14px',
+                                                            flexShrink: 0,
+                                                            opacity: 0.4,
+                                                            transform: expandedJobId === job.id ? 'rotate(180deg)' : 'rotate(0deg)',
+                                                            transition: 'transform 0.15s ease',
+                                                        }}
+                                                    >
+                                                        <path d="M19 9l-7 7-7-7" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                                                    </svg>
                                                 </div>
                                             </td>
                                             <td>
@@ -195,17 +215,8 @@ export default function JobList({ jobs, onCreateJob, onCancelJob, subtitleMode =
                                             <td className="text-sm text-secondary">
                                                 {new Date(job.createdAt).toLocaleString()}
                                             </td>
-                                            <td>
+                                            <td onClick={e => e.stopPropagation()}>
                                                 <div className="flex gap-1">
-                                                    {job.aiLogs && job.aiLogs.length > 0 && (
-                                                        <button
-                                                            className={`btn btn-sm ${expandedJobId === job.id ? 'btn-primary' : 'btn-secondary'}`}
-                                                            onClick={() => setExpandedJobId(expandedJobId === job.id ? null : job.id)}
-                                                            title="Show AI logs"
-                                                        >
-                                                            AI
-                                                        </button>
-                                                    )}
                                                     {job.status === 'processing' || job.status === 'pending' ? (
                                                         <button
                                                             className="btn btn-sm btn-danger"
@@ -220,53 +231,59 @@ export default function JobList({ jobs, onCreateJob, onCancelJob, subtitleMode =
                                                 </div>
                                             </td>
                                         </tr>
-                                        {expandedJobId === job.id && job.aiLogs && job.aiLogs.length > 0 && (
-                                            <tr>
-                                                <td colSpan={6} style={{ padding: '0 1rem 1rem', background: 'var(--bg-secondary)' }}>
-                                                    <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', paddingTop: '0.75rem' }}>
+                                        {expandedJobId === job.id && (
+                                            <tr style={{ background: 'var(--bg-secondary)' }}>
+                                                <td colSpan={6} style={{ padding: '0 1.5rem 1rem' }}>
+                                                    <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', paddingTop: '0.75rem', fontWeight: 500 }}>
                                                         AI Operations
                                                     </div>
-                                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8125rem' }}>
-                                                        <thead>
-                                                            <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                                                                <th style={{ textAlign: 'left', padding: '4px 8px', color: 'var(--text-secondary)', fontWeight: 500 }}>Time</th>
-                                                                <th style={{ textAlign: 'left', padding: '4px 8px', color: 'var(--text-secondary)', fontWeight: 500 }}>Operation</th>
-                                                                <th style={{ textAlign: 'left', padding: '4px 8px', color: 'var(--text-secondary)', fontWeight: 500 }}>Provider</th>
-                                                                <th style={{ textAlign: 'left', padding: '4px 8px', color: 'var(--text-secondary)', fontWeight: 500 }}>Detail</th>
-                                                                <th style={{ textAlign: 'right', padding: '4px 8px', color: 'var(--text-secondary)', fontWeight: 500 }}>Duration</th>
-                                                                <th style={{ textAlign: 'center', padding: '4px 8px', color: 'var(--text-secondary)', fontWeight: 500 }}>Result</th>
-                                                            </tr>
-                                                        </thead>
-                                                        <tbody>
-                                                            {job.aiLogs.map((log, i) => (
-                                                                <tr key={i} style={{ borderBottom: '1px solid var(--border)', opacity: 0.9 }}>
-                                                                    <td style={{ padding: '4px 8px', whiteSpace: 'nowrap' }}>
-                                                                        {new Date(log.timestamp).toLocaleTimeString()}
-                                                                    </td>
-                                                                    <td style={{ padding: '4px 8px' }}>
-                                                                        <span style={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
-                                                                            {log.operation.replace(/_/g, ' ')}
-                                                                        </span>
-                                                                    </td>
-                                                                    <td style={{ padding: '4px 8px', color: 'var(--text-secondary)' }}>
-                                                                        {log.provider}
-                                                                    </td>
-                                                                    <td style={{ padding: '4px 8px' }} title={log.error || ''}>
-                                                                        {log.detail}
-                                                                        {log.error && (
-                                                                            <span className="text-xs text-danger ml-2">({log.error})</span>
-                                                                        )}
-                                                                    </td>
-                                                                    <td style={{ padding: '4px 8px', textAlign: 'right', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>
-                                                                        {log.durationMs}ms
-                                                                    </td>
-                                                                    <td style={{ padding: '4px 8px', textAlign: 'center' }}>
-                                                                        {log.success ? '✓' : '✗'}
-                                                                    </td>
+                                                    {!job.aiLogs || job.aiLogs.length === 0 ? (
+                                                        <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', fontStyle: 'italic', margin: '0 0 0.5rem' }}>
+                                                            No AI operations recorded for this job.
+                                                        </p>
+                                                    ) : (
+                                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8125rem' }}>
+                                                            <thead>
+                                                                <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
+                                                                    <th style={{ textAlign: 'left', padding: '4px 8px', color: 'var(--text-secondary)', fontWeight: 500 }}>Time</th>
+                                                                    <th style={{ textAlign: 'left', padding: '4px 8px', color: 'var(--text-secondary)', fontWeight: 500 }}>Operation</th>
+                                                                    <th style={{ textAlign: 'left', padding: '4px 8px', color: 'var(--text-secondary)', fontWeight: 500 }}>Provider</th>
+                                                                    <th style={{ textAlign: 'left', padding: '4px 8px', color: 'var(--text-secondary)', fontWeight: 500 }}>Detail</th>
+                                                                    <th style={{ textAlign: 'right', padding: '4px 8px', color: 'var(--text-secondary)', fontWeight: 500 }}>Duration</th>
+                                                                    <th style={{ textAlign: 'center', padding: '4px 8px', color: 'var(--text-secondary)', fontWeight: 500 }}>Result</th>
                                                                 </tr>
-                                                            ))}
-                                                        </tbody>
-                                                    </table>
+                                                            </thead>
+                                                            <tbody>
+                                                                {job.aiLogs.map((log, i) => (
+                                                                    <tr key={i} style={{ borderBottom: '1px solid var(--border-color)', opacity: 0.9 }}>
+                                                                        <td style={{ padding: '4px 8px', whiteSpace: 'nowrap' }}>
+                                                                            {new Date(log.timestamp).toLocaleTimeString()}
+                                                                        </td>
+                                                                        <td style={{ padding: '4px 8px' }}>
+                                                                            <span style={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
+                                                                                {log.operation.replace(/_/g, ' ')}
+                                                                            </span>
+                                                                        </td>
+                                                                        <td style={{ padding: '4px 8px', color: 'var(--text-secondary)' }}>
+                                                                            {log.provider}
+                                                                        </td>
+                                                                        <td style={{ padding: '4px 8px' }} title={log.error || ''}>
+                                                                            {log.detail}
+                                                                            {log.error && (
+                                                                                <span className="text-xs text-danger ml-2">({log.error})</span>
+                                                                            )}
+                                                                        </td>
+                                                                        <td style={{ padding: '4px 8px', textAlign: 'right', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>
+                                                                            {log.durationMs}ms
+                                                                        </td>
+                                                                        <td style={{ padding: '4px 8px', textAlign: 'center' }}>
+                                                                            {log.success ? '✓' : '✗'}
+                                                                        </td>
+                                                                    </tr>
+                                                                ))}
+                                                            </tbody>
+                                                        </table>
+                                                    )}
                                                 </td>
                                             </tr>
                                         )}
