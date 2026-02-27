@@ -225,6 +225,7 @@ curl http://localhost:8091/api/scanner/config | jq
 All documentation is organized in the [`docs/`](docs/) folder:
 
 - **Getting Started**
+  - [User Guide](docs/user-guide.md) - Installation, configuration, and feature walkthrough
   - [Deployment Guide](docs/getting-started/deployment.md) - Production deployment and CI/CD
 - **Architecture**
   - [System Overview](docs/architecture/overview.md) - Architecture and data flows
