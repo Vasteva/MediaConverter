@@ -38,6 +38,16 @@ const (
 	JobTypeTest     JobType = "test"
 )
 
+type AILog struct {
+	Timestamp  time.Time `json:"timestamp"`
+	Operation  string    `json:"operation"`  // "metadata_cleaning" | "encoding_analysis" | "subtitle_download" | "verification"
+	Provider   string    `json:"provider"`
+	Detail     string    `json:"detail"`     // human-readable summary
+	DurationMs int64     `json:"durationMs"`
+	Success    bool      `json:"success"`
+	Error      string    `json:"error,omitempty"`
+}
+
 type Job struct {
 	mu              sync.RWMutex `json:"-"`
 	ID              string       `json:"id"`
@@ -66,6 +76,7 @@ type Job struct {
 	DeleteSource    bool         `json:"deleteSource"`
 	MaxRetries      int          `json:"maxRetries"`  // 0 = disabled
 	RetryCount      int          `json:"retryCount"`
+	AILogs          []AILog      `json:"aiLogs,omitempty"`
 
 	// Internal
 	ctx    context.Context
@@ -159,6 +170,8 @@ func (m *Manager) Start() {
 		m.wg.Add(1)
 		go m.worker(i)
 	}
+	m.wg.Add(1)
+	go m.scheduleWatcher()
 }
 
 func (m *Manager) Stop() {
@@ -177,8 +190,8 @@ func (m *Manager) worker(id int) {
 	defer m.wg.Done()
 	for {
 		m.pqMu.Lock()
-		// Wait until there is work or a stop signal.
-		for m.pq.Len() == 0 {
+		// Wait until there is work in the schedule window, or a stop signal.
+		for m.pq.Len() == 0 || !m.isInScheduleWindow() {
 			select {
 			case <-m.stopCh:
 				m.pqMu.Unlock()
@@ -258,6 +271,16 @@ func (m *Manager) updateJob(job *Job, fn func(*Job)) {
 	}
 }
 
+func (m *Manager) appendAILog(job *Job, entry AILog) {
+	job.mu.Lock()
+	job.AILogs = append(job.AILogs, entry)
+	job.mu.Unlock()
+	m.Save()
+	if m.OnJobUpdate != nil {
+		m.OnJobUpdate(job)
+	}
+}
+
 func (m *Manager) processJob(job *Job) {
 	job.mu.Lock()
 	job.ctx, job.cancel = context.WithCancel(context.Background())
@@ -281,6 +304,7 @@ func (m *Manager) processJob(job *Job) {
 		job.mu.RUnlock()
 
 		filename := filepath.Base(sourcePath)
+		t0Meta := time.Now()
 		if cleanTitle, err := cleaner.CleanFilename(ctx, filename); err == nil {
 			log.Printf("[Premium] AI cleaned filename: %s -> %s", filename, cleanTitle)
 			job.mu.Lock()
@@ -290,6 +314,24 @@ func (m *Manager) processJob(job *Job) {
 			dir := filepath.Dir(destPath)
 			job.DestinationPath = filepath.Join(dir, cleanTitle+ext)
 			job.mu.Unlock()
+			m.appendAILog(job, AILog{
+				Timestamp:  t0Meta,
+				Operation:  "metadata_cleaning",
+				Provider:   m.ai.GetName(),
+				Detail:     fmt.Sprintf("Renamed: '%s' → '%s'", filename, cleanTitle),
+				DurationMs: time.Since(t0Meta).Milliseconds(),
+				Success:    true,
+			})
+		} else {
+			m.appendAILog(job, AILog{
+				Timestamp:  t0Meta,
+				Operation:  "metadata_cleaning",
+				Provider:   m.ai.GetName(),
+				Detail:     "No rename needed",
+				DurationMs: time.Since(t0Meta).Milliseconds(),
+				Success:    false,
+				Error:      err.Error(),
+			})
 		}
 	}
 
@@ -452,6 +494,60 @@ func (m *Manager) processJob(job *Job) {
 	}
 }
 
+func (m *Manager) isInScheduleWindow() bool {
+	sched := m.config.Schedule
+	if !sched.Enabled {
+		return true
+	}
+	loc := time.UTC
+	if sched.Timezone != "" {
+		if l, err := time.LoadLocation(sched.Timezone); err == nil {
+			loc = l
+		}
+	}
+	now := time.Now().In(loc)
+	if len(sched.AllowedDays) > 0 {
+		ok := false
+		for _, d := range sched.AllowedDays {
+			if int(now.Weekday()) == d {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	h, s, e := now.Hour(), sched.StartHour, sched.EndHour
+	if s == e {
+		return true // same hour = unrestricted
+	}
+	if s < e {
+		return h >= s && h < e // daytime window
+	}
+	return h >= s || h < e // overnight window (e.g. 22–06)
+}
+
+func (m *Manager) scheduleWatcher() {
+	defer m.wg.Done()
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	wasAllowed := m.isInScheduleWindow()
+	for {
+		select {
+		case <-m.stopCh:
+			return
+		case <-ticker.C:
+			isAllowed := m.isInScheduleWindow()
+			if isAllowed && !wasAllowed {
+				log.Printf("[Scheduler] Processing window opened — waking workers")
+				m.pqCond.Broadcast()
+			}
+			wasAllowed = isAllowed
+		}
+	}
+}
+
 func (m *Manager) runExtraction(job *Job) error {
 	if m.makemkv == nil {
 		return fmt.Errorf("makemkv wrapper not initialized")
@@ -519,11 +615,30 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 	if m.config.IsPremium && m.ai != nil {
 		cleaner := meta.NewCleaner(m.ai)
 		log.Printf("[Premium] AI analyzing media for optimal encoding settings...")
+		t0Enc := time.Now()
 		if suggestedCRF, err := cleaner.AnalyzeEncoding(job.ctx, info.RawJSON); err == nil {
 			log.Printf("[Premium] AI suggested CRF: %d (System Default: %d)", suggestedCRF, crf)
+			defaultCRF := crf
 			crf = suggestedCRF
+			m.appendAILog(job, AILog{
+				Timestamp:  t0Enc,
+				Operation:  "encoding_analysis",
+				Provider:   m.ai.GetName(),
+				Detail:     fmt.Sprintf("Suggested CRF %d (system default: %d)", suggestedCRF, defaultCRF),
+				DurationMs: time.Since(t0Enc).Milliseconds(),
+				Success:    true,
+			})
 		} else {
 			log.Printf("[Premium] AI analysis failed: %v", err)
+			m.appendAILog(job, AILog{
+				Timestamp:  t0Enc,
+				Operation:  "encoding_analysis",
+				Provider:   m.ai.GetName(),
+				Detail:     fmt.Sprintf("Analysis failed, using CRF %d", crf),
+				DurationMs: time.Since(t0Enc).Milliseconds(),
+				Success:    false,
+				Error:      err.Error(),
+			})
 		}
 	}
 
@@ -574,16 +689,43 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 			m.config.SubtitlePassword,
 			m.config.SubtitleLang,
 		)
+		t0Sub := time.Now()
 		if srtContent, sErr := dl.Download(job.ctx, destPath); sErr != nil {
 			log.Printf("Warning: Subtitle download failed: %v", sErr)
+			m.appendAILog(job, AILog{
+				Timestamp:  t0Sub,
+				Operation:  "subtitle_download",
+				Provider:   "opensubtitles",
+				Detail:     fmt.Sprintf("Download failed for %s", filepath.Base(destPath)),
+				DurationMs: time.Since(t0Sub).Milliseconds(),
+				Success:    false,
+				Error:      sErr.Error(),
+			})
 		} else {
 			srtPath := strings.TrimSuffix(destPath, filepath.Ext(destPath)) + ".srt"
 			if wErr := os.WriteFile(srtPath, []byte(srtContent), 0644); wErr != nil {
 				log.Printf("Warning: Failed to save SRT file: %v", wErr)
+				m.appendAILog(job, AILog{
+					Timestamp:  t0Sub,
+					Operation:  "subtitle_download",
+					Provider:   "opensubtitles",
+					Detail:     fmt.Sprintf("Downloaded but failed to save SRT: %s", filepath.Base(srtPath)),
+					DurationMs: time.Since(t0Sub).Milliseconds(),
+					Success:    false,
+					Error:      wErr.Error(),
+				})
 			} else {
 				log.Printf("[Subtitles] Saved: %s", srtPath)
 				m.updateJob(job, func(j *Job) {
 					j.AISubtitles = true
+				})
+				m.appendAILog(job, AILog{
+					Timestamp:  t0Sub,
+					Operation:  "subtitle_download",
+					Provider:   "opensubtitles",
+					Detail:     fmt.Sprintf("Downloaded %s subtitles (OpenSubtitles)", m.config.SubtitleLang),
+					DurationMs: time.Since(t0Sub).Milliseconds(),
+					Success:    true,
 				})
 			}
 		}
@@ -597,15 +739,33 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 			j.StatusDetail = "Verifying"
 		})
 
+		t0Ver := time.Now()
 		if vOk, vErr := m.runVerificationFromPaths(job, sourcePath, destPath); vErr != nil {
 			log.Printf("Warning: AI Verification failed to execute: %v", vErr)
 			m.updateJob(job, func(j *Job) {
 				j.Error = fmt.Sprintf("Verification error: %v", vErr)
 			})
+			m.appendAILog(job, AILog{
+				Timestamp:  t0Ver,
+				Operation:  "verification",
+				Provider:   m.ai.GetName(),
+				Detail:     "Verification failed to execute",
+				DurationMs: time.Since(t0Ver).Milliseconds(),
+				Success:    false,
+				Error:      vErr.Error(),
+			})
 		} else if !vOk {
 			log.Printf("[Premium] FAILURE: AI detected corruption in output video.")
 			m.updateJob(job, func(j *Job) {
 				j.Error = "AI Verification Failed: Corruption detected"
+			})
+			m.appendAILog(job, AILog{
+				Timestamp:  t0Ver,
+				Operation:  "verification",
+				Provider:   m.ai.GetName(),
+				Detail:     "FAIL — corruption detected",
+				DurationMs: time.Since(t0Ver).Milliseconds(),
+				Success:    false,
 			})
 			// We do NOT set verified=true
 		} else {
@@ -613,6 +773,14 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 			verified = true
 			m.updateJob(job, func(j *Job) {
 				j.Verified = true
+			})
+			m.appendAILog(job, AILog{
+				Timestamp:  t0Ver,
+				Operation:  "verification",
+				Provider:   m.ai.GetName(),
+				Detail:     "Video integrity verified: PASS",
+				DurationMs: time.Since(t0Ver).Milliseconds(),
+				Success:    true,
 			})
 		}
 	} else if !verifyOutput {

@@ -1,3 +1,13 @@
+export interface AILog {
+    timestamp: string;
+    operation: 'metadata_cleaning' | 'encoding_analysis' | 'subtitle_download' | 'verification';
+    provider: string;
+    detail: string;
+    durationMs: number;
+    success: boolean;
+    error?: string;
+}
+
 export interface Job {
     id: string;
     type: 'extract' | 'optimize' | 'test';
@@ -25,6 +35,15 @@ export interface Job {
     deleteSource?: boolean;
     maxRetries?: number;
     retryCount?: number;
+    aiLogs?: AILog[];
+}
+
+export interface ProcessingSchedule {
+    enabled: boolean;
+    startHour: number;
+    endHour: number;
+    allowedDays: number[];  // 0=Sun…6=Sat
+    timezone: string;
 }
 
 export interface SystemConfig {
@@ -49,6 +68,7 @@ export interface SystemConfig {
     subtitleUsername?: string;
     subtitlePassword?: string;    // write-only — never returned by GET /api/config
     subtitlePasswordSet?: boolean; // true when a password has been saved (replaces the value for display)
+    schedule?: ProcessingSchedule;
 }
 export interface WatchDirectory {
     path: string;

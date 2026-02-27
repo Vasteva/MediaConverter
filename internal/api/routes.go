@@ -391,25 +391,27 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			"subtitleApiKey":      subtitleAPIKey,
 			"subtitleUsername":    cfg.SubtitleUsername,
 			"subtitlePasswordSet": cfg.SubtitlePassword != "",
+			"schedule":         cfg.Schedule,
 		})
 	})
 
 	api.Post("/config", func(c *fiber.Ctx) error {
 		var req struct {
-			QualityPreset    string `json:"qualityPreset"`
-			CRF              *int   `json:"crf"`
-			AIProvider       string `json:"aiProvider"`
-			AIApiKey         string `json:"aiApiKey"`
-			AIEndpoint       string `json:"aiEndpoint"`
-			AIModel          string `json:"aiModel"`
-			LicenseKey       string `json:"licenseKey"`
-			VerifyOutput     *bool  `json:"verifyOutput"`
-			DeleteSource     *bool  `json:"deleteSource"`
-			SubtitleMode     string `json:"subtitleMode"`
-			SubtitleLang     string `json:"subtitleLang"`
-			SubtitleAPIKey   string `json:"subtitleApiKey"`
-			SubtitleUsername string `json:"subtitleUsername"`
-			SubtitlePassword string `json:"subtitlePassword"`
+			QualityPreset    string                      `json:"qualityPreset"`
+			CRF              *int                        `json:"crf"`
+			AIProvider       string                      `json:"aiProvider"`
+			AIApiKey         string                      `json:"aiApiKey"`
+			AIEndpoint       string                      `json:"aiEndpoint"`
+			AIModel          string                      `json:"aiModel"`
+			LicenseKey       string                      `json:"licenseKey"`
+			VerifyOutput     *bool                       `json:"verifyOutput"`
+			DeleteSource     *bool                       `json:"deleteSource"`
+			SubtitleMode     string                      `json:"subtitleMode"`
+			SubtitleLang     string                      `json:"subtitleLang"`
+			SubtitleAPIKey   string                      `json:"subtitleApiKey"`
+			SubtitleUsername string                      `json:"subtitleUsername"`
+			SubtitlePassword string                      `json:"subtitlePassword"`
+			Schedule         *config.ProcessingSchedule  `json:"schedule"`
 		}
 		if err := c.BodyParser(&req); err != nil {
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
@@ -468,6 +470,11 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		}
 		if req.SubtitlePassword != "" {
 			cfg.SubtitlePassword = req.SubtitlePassword
+		}
+
+		// Schedule
+		if req.Schedule != nil {
+			cfg.Schedule = *req.Schedule
 		}
 
 		// Re-initialize AI provider in manager

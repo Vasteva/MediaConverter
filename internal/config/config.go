@@ -14,6 +14,14 @@ import (
 
 const currentSchemaVersion = 1
 
+type ProcessingSchedule struct {
+	Enabled     bool   `json:"enabled"`
+	StartHour   int    `json:"startHour"`   // 0–23
+	EndHour     int    `json:"endHour"`     // 0–23
+	AllowedDays []int  `json:"allowedDays"` // 0=Sun…6=Sat; empty = all days
+	Timezone    string `json:"timezone"`    // IANA e.g. "America/New_York"
+}
+
 type Config struct {
 	SchemaVersion int `json:"schemaVersion"`
 
@@ -59,6 +67,9 @@ type Config struct {
 	// Processing
 	VerifyOutput bool `json:"verifyOutput"` // Default: false (Pro only)
 	DeleteSource bool `json:"deleteSource"` // Default: false
+
+	// Scheduling
+	Schedule ProcessingSchedule `json:"schedule"`
 
 	// State
 	IsPremium     bool `json:"-"`
@@ -226,6 +237,10 @@ func (c *Config) loadFromDisk() error {
 	}
 	if importJSON.SubtitlePassword != "" {
 		c.SubtitlePassword = importJSON.SubtitlePassword
+	}
+
+	if _, ok := rawFields["schedule"]; ok {
+		c.Schedule = importJSON.Schedule
 	}
 
 	return nil

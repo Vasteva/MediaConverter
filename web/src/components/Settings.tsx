@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, Fragment } from 'react';
-import type { SystemConfig } from '../types';
+import type { SystemConfig, ProcessingSchedule } from '../types';
 
 interface SettingsProps {
     config: SystemConfig | null;
@@ -82,6 +82,10 @@ export default function Settings({ config: initialConfig, onConfigUpdate, token 
     };
 
     const isPremium = config.isPremium;
+
+    const defaultSchedule: ProcessingSchedule = { enabled: false, startHour: 22, endHour: 6, allowedDays: [], timezone: 'UTC' };
+    const schedule: ProcessingSchedule = config.schedule ?? defaultSchedule;
+    const setSchedule = (s: ProcessingSchedule) => setConfig({ ...config, schedule: s });
 
     return (
         <div className="settings-view">
@@ -343,6 +347,127 @@ export default function Settings({ config: initialConfig, onConfigUpdate, token 
                         <p className="text-sm text-secondary">
                             <strong>Pro Tip:</strong> Using a local model with <strong>Ollama</strong> or a fast cloud model like <strong>Gemini Flash</strong> is recommended for real-time media analysis.
                         </p>
+                    </div>
+                </div>
+            </div>
+
+            {/* Processing Schedule */}
+            <div className="card mt-4">
+                <div className="card-header">
+                    <h3 className="card-title">Processing Schedule</h3>
+                </div>
+                <div className="card-body">
+                    <div className="flex flex-col gap-4">
+                        <div className="setting-item">
+                            <label className="setting-label">Schedule</label>
+                            <label className="flex items-center gap-2 cursor-pointer mt-2">
+                                <input
+                                    type="checkbox"
+                                    className="checkbox"
+                                    checked={schedule.enabled}
+                                    onChange={e => setSchedule({ ...schedule, enabled: e.target.checked })}
+                                    disabled={isSaving}
+                                />
+                                <span className="text-sm">Restrict job processing to specific hours/days</span>
+                            </label>
+                            <p className="text-xs text-secondary mt-1">
+                                When enabled, queued jobs will only be dequeued during the configured window.
+                            </p>
+                        </div>
+
+                        {schedule.enabled && (
+                            <div className="flex flex-col gap-4">
+                                <div className="setting-item">
+                                    <label className="setting-label">Allowed Days</label>
+                                    <div className="flex gap-2 mt-2 flex-wrap">
+                                        {(['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const).map((day, idx) => (
+                                            <label key={day} className="flex items-center gap-1 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={schedule.allowedDays.includes(idx)}
+                                                    onChange={e => {
+                                                        const days = e.target.checked
+                                                            ? [...schedule.allowedDays, idx].sort()
+                                                            : schedule.allowedDays.filter(d => d !== idx);
+                                                        setSchedule({ ...schedule, allowedDays: days });
+                                                    }}
+                                                    disabled={isSaving}
+                                                />
+                                                <span className="text-sm">{day}</span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                    <p className="text-xs text-secondary mt-1">Leave all unchecked to allow any day.</p>
+                                </div>
+
+                                <div className="grid grid-2 gap-4">
+                                    <div className="setting-item">
+                                        <label className="setting-label">Start Hour</label>
+                                        <select
+                                            className="input select"
+                                            value={schedule.startHour}
+                                            onChange={e => setSchedule({ ...schedule, startHour: Number(e.target.value) })}
+                                            disabled={isSaving}
+                                        >
+                                            {Array.from({ length: 24 }, (_, h) => (
+                                                <option key={h} value={h}>
+                                                    {new Date(0, 0, 0, h).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    <div className="setting-item">
+                                        <label className="setting-label">End Hour</label>
+                                        <select
+                                            className="input select"
+                                            value={schedule.endHour}
+                                            onChange={e => setSchedule({ ...schedule, endHour: Number(e.target.value) })}
+                                            disabled={isSaving}
+                                        >
+                                            {Array.from({ length: 24 }, (_, h) => (
+                                                <option key={h} value={h}>
+                                                    {new Date(0, 0, 0, h).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div className="setting-item">
+                                    <label className="setting-label">Timezone</label>
+                                    <input
+                                        type="text"
+                                        className="input"
+                                        value={schedule.timezone}
+                                        onChange={e => setSchedule({ ...schedule, timezone: e.target.value })}
+                                        disabled={isSaving}
+                                        placeholder="UTC"
+                                    />
+                                    <span className="text-xs text-secondary mt-1">IANA timezone name, e.g. America/New_York, Europe/London</span>
+                                </div>
+
+                                {/* Summary preview */}
+                                <div className="p-3 bg-tertiary rounded-lg border border-border text-sm text-secondary">
+                                    {(() => {
+                                        const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+                                        const dayStr = schedule.allowedDays.length > 0
+                                            ? schedule.allowedDays.map(d => dayNames[d]).join(', ')
+                                            : 'Every day';
+                                        const fmt = (h: number) => new Date(0, 0, 0, h).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+                                        return `Jobs will process on ${dayStr}, ${fmt(schedule.startHour)} – ${fmt(schedule.endHour)} (${schedule.timezone || 'UTC'})`;
+                                    })()}
+                                </div>
+                            </div>
+                        )}
+
+                        <button
+                            className="btn btn-primary"
+                            onClick={() => handleSave({ schedule })}
+                            disabled={isSaving}
+                        >
+                            {isSaving ? 'Saving...' : 'Save Schedule'}
+                        </button>
                     </div>
                 </div>
             </div>
