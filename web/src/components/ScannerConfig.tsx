@@ -121,8 +121,8 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
         const newWatchDir: WatchDirectory = {
             path: newDir,
             recursive: true,
-            includePatterns: ['*'],
-            excludePatterns: [],
+            includePatterns: ['*.mkv', '*.mp4', '*.avi', '*.mov', '*.iso'],
+            excludePatterns: ['*_optimized.mkv', '*_temp*', '.*'],
             minFileSizeMB: 0,
             minFileAgeMinutes: 0
         };

@@ -542,6 +542,13 @@ func (s *Scanner) createJobForFile(path string) error {
 	// Generate output path
 	outputPath := s.generateOutputPath(path, jobType)
 
+	// Skip if the expected output already exists — file was processed before tracking began
+	if outInfo, err := os.Stat(outputPath); err == nil && outInfo.Size() > 0 {
+		log.Printf("[Scanner] Skipping %s: output already exists at %s", path, outputPath)
+		s.processedDB.MarkProcessed(ProcessedFile{Path: path, JobType: string(jobType)})
+		return nil
+	}
+
 	// Create job
 	job := &jobs.Job{
 		ID:              util.GenerateID(),
@@ -798,6 +805,14 @@ func (s *Scanner) Discover() ([]DiscoveredFile, error) {
 			} else if s.containsExtension(s.config.OptimizeExtensions, ext) {
 				jobType = "optimize"
 			} else {
+				continue
+			}
+
+			// Skip if the expected output file already exists (e.g. processed before
+			// tracking began, or processedDB was cleared).
+			outputPath := s.generateOutputPath(path, jobs.JobType(jobType))
+			if outInfo, err := os.Stat(outputPath); err == nil && outInfo.Size() > 0 {
+				s.processedDB.MarkProcessed(ProcessedFile{Path: path, JobType: jobType})
 				continue
 			}
 
