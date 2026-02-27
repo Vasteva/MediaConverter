@@ -1,6 +1,6 @@
 # Vastiva Media Converter - Task List
 
-**Generated:** 2026-02-01 | **Last Updated:** 2026-02-25
+**Generated:** 2026-02-01 | **Last Updated:** 2026-02-27
 
 ## 📋 Executive Summary
 
@@ -95,11 +95,10 @@ The project is in a **solid foundation state** with the core backend functionali
 ### 12. ~~useEffect Dependency Warnings~~ ✅ FIXED
 - **Status:** ✅ Resolved
 
-### 13. Roadmap Items (from README.md)
-Per the README, these features are planned but not implemented:
-- [ ] **Multi-user support** — Currently single admin only
-- [ ] **Advanced scheduling** — Job scheduling by time/day
-- [ ] **Webhook notifications** — Notify external services on events
+### 13. ~~Roadmap Items (from README.md)~~ ✅ DONE
+- [x] **Advanced scheduling** — Job scheduling by time/day ✅ Resolved (2026-02-27)
+- [x] **Per-job AI logging** — Include details of what AI accomplished for each job ✅ Resolved (2026-02-27)
+- **Details:** Added `ProcessingSchedule` config struct (startHour, endHour, allowedDays, timezone) with IANA timezone support and overnight window handling. Workers block outside the schedule window; a `scheduleWatcher` goroutine broadcasts when the window opens. Added `AILog` struct to jobs with per-operation entries for metadata cleaning, encoding analysis, subtitle download, and verification. Frontend: Settings UI has a Processing Schedule card; JobList has expandable AI log rows per job.
 
 ### 14. ~~MakeMKV Not Installed in Docker Image~~ ✅ FIXED
 - **Status:** ✅ Resolved
@@ -168,8 +167,8 @@ Per the README, these features are planned but not implemented:
 | 🟡 Medium | 0 | 7 |
 | 🟢 Low | 0 | 9 |
 
-**All known bugs resolved as of 2026-02-25.**
+**All known bugs resolved as of 2026-02-27.**
 
 ---
 
-*This task list is maintained manually. Last full review: 2026-02-25.*
+*This task list is maintained manually. Last full review: 2026-02-27.*
