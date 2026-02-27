@@ -5,10 +5,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // MakeMKVWrapper handles MakeMKV disc extraction
@@ -104,38 +106,40 @@ func (m *MakeMKVWrapper) ExtractWithProgress(ctx context.Context, opts ExtractOp
 		return fmt.Errorf("failed to start makemkvcon: %w", err)
 	}
 
-	// Parse progress in a goroutine
-	if callback != nil {
-		go m.parseExtractProgress(stdout, callback)
-	} else {
-		// If no callback, we still need to consume stdout
-		go func() {
-			buf := make([]byte, 1024)
-			for {
-				if _, err := stdout.Read(buf); err != nil {
-					break
-				}
-			}
-		}()
-	}
+	// Drain stdout in a goroutine; Wait() must not be called before all reads complete.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if callback != nil {
+			m.parseExtractProgress(stdout, callback)
+		} else {
+			io.Copy(io.Discard, stdout) //nolint:errcheck
+		}
+	}()
 
-	// Wait for completion
-	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("makemkvcon extraction failed: %w", err)
-	}
+	// Wait for the command to exit, then for the goroutine to drain the pipe.
+	cmdErr := cmd.Wait()
+	wg.Wait()
 
+	if cmdErr != nil {
+		return fmt.Errorf("makemkvcon extraction failed: %w", cmdErr)
+	}
 	return nil
 }
 
-// parseExtractProgress parses MakeMKV robot mode output for progress
+// parseExtractProgress parses MakeMKV robot mode output for progress.
+// MakeMKV can emit very long MSG: lines; the scanner buffer is set to 1 MB to
+// prevent the default 64 KB limit from causing silent early termination.
 func (m *MakeMKVWrapper) parseExtractProgress(reader io.Reader, callback ProgressCallback) {
 	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 	progress := TranscodeProgress{}
 
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// PRGV:current,total,max
+		// PRGV:current,total,max — overall extraction progress
 		if strings.HasPrefix(line, "PRGV:") {
 			parts := strings.Split(strings.TrimPrefix(line, "PRGV:"), ",")
 			if len(parts) >= 3 {
@@ -149,6 +153,9 @@ func (m *MakeMKVWrapper) parseExtractProgress(reader io.Reader, callback Progres
 				}
 			}
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		log.Printf("[MakeMKV] Progress scanner error: %v", err)
 	}
 }
 
