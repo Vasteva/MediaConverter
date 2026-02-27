@@ -1,0 +1,63 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build and Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23' # Matching current project needs
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build Frontend
+        run: |
+          cd web
+          npm install
+          npm run build
+
+      - name: Build Binaries
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          # Build for multiple platforms
+          mkdir -p dist
+          
+          # Linux
+          GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/vastiva-linux-amd64 ./cmd/server
+          
+          # macOS
+          GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/vastiva-darwin-amd64 ./cmd/server
+          GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/vastiva-darwin-arm64 ./cmd/server
+          
+          # Windows
+          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/vastiva-windows-amd64.exe ./cmd/server
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/vastiva-linux-amd64
+            dist/vastiva-darwin-amd64
+            dist/vastiva-darwin-arm64
+            dist/vastiva-windows-amd64.exe
+          generate_release_notes: true
+          draft: false
+          prerelease: false
