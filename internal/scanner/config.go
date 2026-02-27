@@ -2,14 +2,17 @@ package scanner
 
 import (
 	"encoding/json"
-	"fmt"
+	"log"
 	"os"
 
 	"github.com/Vasteva/MediaConverter/internal/config"
 )
 
-// LoadScannerConfig loads scanner configuration from file and environment
+// LoadScannerConfig loads scanner configuration from file and environment.
+// It never returns an error; if the config file is missing or unreadable the
+// env/global-config defaults are used so that ProcessedFilePath is always set.
 func LoadScannerConfig(cfg *config.Config, watchDirsFile string) (*ScannerConfig, error) {
+	// Build defaults from environment/global config
 	scannerCfg := &ScannerConfig{
 		Mode:              ScanMode(cfg.ScannerMode),
 		Enabled:           cfg.ScannerEnabled,
@@ -27,15 +30,8 @@ func LoadScannerConfig(cfg *config.Config, watchDirsFile string) (*ScannerConfig
 		},
 	}
 
-	// Load watch directories from file if it exists
-	if watchDirsFile != "" {
-		watchDirs, err := loadWatchDirectories(watchDirsFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load watch directories: %w", err)
-		}
-		scannerCfg.WatchDirectories = watchDirs
-	} else {
-		// Use default watch directory from SOURCE_DIR
+	if watchDirsFile == "" {
+		// No config file — use a default watch directory from SOURCE_DIR
 		scannerCfg.WatchDirectories = []WatchDirectory{
 			{
 				Path:              cfg.SourceDir,
@@ -46,24 +42,36 @@ func LoadScannerConfig(cfg *config.Config, watchDirsFile string) (*ScannerConfig
 				MinFileAgeMinutes: 2,
 			},
 		}
+		return scannerCfg, nil
+	}
+
+	data, err := os.ReadFile(watchDirsFile)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("[Scanner] Warning: could not read config file %s: %v — using defaults", watchDirsFile, err)
+		}
+		return scannerCfg, nil
+	}
+
+	// The file is written by saveConfig() as a full ScannerConfig object.
+	// Support a legacy []WatchDirectory array format as well.
+	if len(data) > 0 && data[0] == '{' {
+		var fullCfg ScannerConfig
+		if err := json.Unmarshal(data, &fullCfg); err == nil {
+			fullCfg.Validate()
+			return &fullCfg, nil
+		}
+		log.Printf("[Scanner] Warning: could not parse config file %s as ScannerConfig: %v — using defaults", watchDirsFile, err)
+	} else if len(data) > 0 && data[0] == '[' {
+		var watchDirs []WatchDirectory
+		if err := json.Unmarshal(data, &watchDirs); err == nil {
+			scannerCfg.WatchDirectories = watchDirs
+		} else {
+			log.Printf("[Scanner] Warning: could not parse config file %s as watch directories: %v — using defaults", watchDirsFile, err)
+		}
 	}
 
 	return scannerCfg, nil
-}
-
-// loadWatchDirectories loads watch directory configuration from JSON file
-func loadWatchDirectories(filePath string) ([]WatchDirectory, error) {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, err
-	}
-
-	var watchDirs []WatchDirectory
-	if err := json.Unmarshal(data, &watchDirs); err != nil {
-		return nil, err
-	}
-
-	return watchDirs, nil
 }
 
 // SaveWatchDirectories saves watch directory configuration to JSON file

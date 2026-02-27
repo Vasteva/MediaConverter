@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import FileBrowserModal from './FileBrowserModal';
 import type { ScannerConfig, WatchDirectory } from '../types';
 
@@ -53,6 +53,33 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
     const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
     const [isQueuing, setIsQueuing] = useState(false);
     const [queueResult, setQueueResult] = useState<string | null>(null);
+    const [filterType, setFilterType] = useState<'all' | 'optimize' | 'extract'>('all');
+    type SortField = 'name' | 'sizeBytes' | 'estimatedSavingsPct' | 'jobType';
+    const [sortField, setSortField] = useState<SortField>('name');
+    const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+
+    const displayedFiles = useMemo(() => {
+        if (!discoveredFiles) return [];
+        const filtered = filterType === 'all' ? discoveredFiles : discoveredFiles.filter(f => f.jobType === filterType);
+        return [...filtered].sort((a, b) => {
+            let cmp = 0;
+            if (sortField === 'name') cmp = a.name.localeCompare(b.name);
+            else if (sortField === 'sizeBytes') cmp = a.sizeBytes - b.sizeBytes;
+            else if (sortField === 'estimatedSavingsPct') cmp = a.estimatedSavingsPct - b.estimatedSavingsPct;
+            else cmp = a.jobType.localeCompare(b.jobType);
+            return sortDir === 'asc' ? cmp : -cmp;
+        });
+    }, [discoveredFiles, filterType, sortField, sortDir]);
+
+    const handleSort = (field: SortField) => {
+        if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+        else { setSortField(field); setSortDir('asc'); }
+    };
+
+    const sortIcon = (field: SortField) => {
+        if (sortField !== field) return ' ⇅';
+        return sortDir === 'asc' ? ' ↑' : ' ↓';
+    };
 
     useEffect(() => {
         const fetchStatus = async () => {
@@ -161,11 +188,19 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
     };
 
     const toggleSelectAll = () => {
-        if (!discoveredFiles) return;
-        if (selectedPaths.size === discoveredFiles.length) {
-            setSelectedPaths(new Set());
+        const allDisplayedSelected = displayedFiles.length > 0 && displayedFiles.every(f => selectedPaths.has(f.path));
+        if (allDisplayedSelected) {
+            setSelectedPaths(prev => {
+                const next = new Set(prev);
+                displayedFiles.forEach(f => next.delete(f.path));
+                return next;
+            });
         } else {
-            setSelectedPaths(new Set(discoveredFiles.map(f => f.path)));
+            setSelectedPaths(prev => {
+                const next = new Set(prev);
+                displayedFiles.forEach(f => next.add(f.path));
+                return next;
+            });
         }
     };
 
@@ -466,19 +501,36 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
             {/* Discovery Results */}
             {discoveredFiles !== null && (
                 <div className="card mt-6">
-                    <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
                         <div>
                             <h3 className="card-title">Discovered Files</h3>
                             <p className="text-secondary text-sm mt-1">
                                 {discoveredFiles.length === 0
                                     ? 'No new files found'
-                                    : `${discoveredFiles.length} file${discoveredFiles.length !== 1 ? 's' : ''} ready to queue · ${selectedPaths.size} selected`}
+                                    : `${discoveredFiles.length} file${discoveredFiles.length !== 1 ? 's' : ''} ready to queue${filterType !== 'all' ? ` · ${displayedFiles.length} shown` : ''} · ${selectedPaths.size} selected`}
                             </p>
                         </div>
                         {discoveredFiles.length > 0 && (
-                            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                                <div style={{ display: 'flex', gap: '0.25rem', background: 'var(--bg-tertiary)', borderRadius: '6px', padding: '3px' }}>
+                                    {(['all', 'optimize', 'extract'] as const).map(t => (
+                                        <button
+                                            key={t}
+                                            type="button"
+                                            onClick={() => setFilterType(t)}
+                                            style={{
+                                                padding: '3px 10px', borderRadius: '4px', fontSize: '0.8rem', fontWeight: 500,
+                                                background: filterType === t ? 'var(--bg-card)' : 'transparent',
+                                                color: filterType === t ? 'var(--text-primary)' : 'var(--text-secondary)',
+                                                border: 'none', cursor: 'pointer', transition: 'all 0.15s'
+                                            }}
+                                        >
+                                            {t === 'all' ? 'All' : t.charAt(0).toUpperCase() + t.slice(1)}
+                                        </button>
+                                    ))}
+                                </div>
                                 <button className="btn btn-secondary" onClick={toggleSelectAll}>
-                                    {selectedPaths.size === discoveredFiles.length ? 'Deselect All' : 'Select All'}
+                                    {displayedFiles.length > 0 && displayedFiles.every(f => selectedPaths.has(f.path)) ? 'Deselect All' : 'Select All'}
                                 </button>
                                 <button
                                     className="btn btn-primary"
@@ -507,19 +559,31 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
                                         <th style={{ width: '48px', padding: '0.75rem 1rem', textAlign: 'center' }}>
                                             <input
                                                 type="checkbox"
-                                                checked={selectedPaths.size === discoveredFiles.length}
+                                                checked={displayedFiles.length > 0 && displayedFiles.every(f => selectedPaths.has(f.path))}
                                                 onChange={toggleSelectAll}
                                             />
                                         </th>
-                                        <th style={{ textAlign: 'left', padding: '0.75rem 1rem', fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>File</th>
-                                        <th style={{ width: '80px', textAlign: 'center', padding: '0.75rem 1rem', fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Type</th>
-                                        <th style={{ width: '100px', textAlign: 'right', padding: '0.75rem 1rem', fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Current Size</th>
-                                        <th style={{ width: '120px', textAlign: 'right', padding: '0.75rem 1rem', fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Est. Savings</th>
+                                        <th
+                                            onClick={() => handleSort('name')}
+                                            style={{ textAlign: 'left', padding: '0.75rem 1rem', fontWeight: 600, fontSize: '0.85rem', color: sortField === 'name' ? 'var(--text-primary)' : 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', cursor: 'pointer', userSelect: 'none' }}
+                                        >File{sortIcon('name')}</th>
+                                        <th
+                                            onClick={() => handleSort('jobType')}
+                                            style={{ width: '80px', textAlign: 'center', padding: '0.75rem 1rem', fontWeight: 600, fontSize: '0.85rem', color: sortField === 'jobType' ? 'var(--text-primary)' : 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', cursor: 'pointer', userSelect: 'none' }}
+                                        >Type{sortIcon('jobType')}</th>
+                                        <th
+                                            onClick={() => handleSort('sizeBytes')}
+                                            style={{ width: '100px', textAlign: 'right', padding: '0.75rem 1rem', fontWeight: 600, fontSize: '0.85rem', color: sortField === 'sizeBytes' ? 'var(--text-primary)' : 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', cursor: 'pointer', userSelect: 'none' }}
+                                        >Size{sortIcon('sizeBytes')}</th>
+                                        <th
+                                            onClick={() => handleSort('estimatedSavingsPct')}
+                                            style={{ width: '120px', textAlign: 'right', padding: '0.75rem 1rem', fontWeight: 600, fontSize: '0.85rem', color: sortField === 'estimatedSavingsPct' ? 'var(--text-primary)' : 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', cursor: 'pointer', userSelect: 'none' }}
+                                        >Est. Savings{sortIcon('estimatedSavingsPct')}</th>
                                         <th style={{ width: '160px', padding: '0.75rem 1rem' }}></th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {discoveredFiles.map((file) => {
+                                    {displayedFiles.map((file) => {
                                         const isSelected = selectedPaths.has(file.path);
                                         return (
                                             <tr

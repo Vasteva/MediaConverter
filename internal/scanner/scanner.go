@@ -163,6 +163,14 @@ func NewScanner(config *ScannerConfig, jobManager *jobs.Manager, configFilePath 
 		log.Printf("[Scanner] No persisted config found or failed to load, using defaults: %v", err)
 	} else {
 		log.Println("[Scanner] Loaded settings from persistence")
+		// Re-initialize processedDB if the config file specified a different path
+		if scanner.config.ProcessedFilePath != processedDB.filePath {
+			if newDB, dbErr := NewProcessedDB(scanner.config.ProcessedFilePath); dbErr == nil {
+				scanner.processedDB = newDB
+			} else {
+				log.Printf("[Scanner] Warning: could not re-init processedDB at %s: %v — keeping original", scanner.config.ProcessedFilePath, dbErr)
+			}
+		}
 	}
 
 	// Initialize file watcher if needed
