@@ -479,9 +479,20 @@ func (m *Manager) processJob(job *Job) {
 			j.Status = StatusCompleted
 			j.Progress = 100
 			j.CompletedAt = time.Now()
-			// Track output size
+			// Track output size (walk directories for extract jobs)
 			if info, err := os.Stat(j.DestinationPath); err == nil {
-				j.OutputSize = info.Size()
+				if info.IsDir() {
+					var total int64
+					filepath.Walk(j.DestinationPath, func(_ string, fi os.FileInfo, err error) error { //nolint:errcheck
+						if err == nil && !fi.IsDir() {
+							total += fi.Size()
+						}
+						return nil
+					})
+					j.OutputSize = total
+				} else {
+					j.OutputSize = info.Size()
+				}
 			}
 		})
 	}

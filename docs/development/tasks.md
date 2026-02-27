@@ -156,6 +156,16 @@ The project is in a **solid foundation state** with the core backend functionali
 | Dashboard stats | ✅ Working |
 | Path security validation | ✅ Working |
 
+### 28. Extract Job Output Size Shows 3–4 Bytes Instead of Actual Content Size
+- **Status:** ✅ Resolved (2026-02-27)
+- **File:** `internal/jobs/manager.go`
+- **Details:** `os.Stat(directory).Size()` returns the directory inode size (typically 3–4 bytes on Linux), not the total content size. For extract jobs, `DestinationPath` is a directory. Fixed by walking the directory tree with `filepath.Walk` to sum the sizes of all contained files when `info.IsDir()` is true.
+
+### 29. 4K Upscaling Fails on HDR/DV Content (Intel/AMD VAAPI) — FFmpeg Exit 218
+- **Status:** ✅ Resolved (2026-02-27)
+- **File:** `internal/media/ffmpeg.go`
+- **Details:** `getHWAccelInputArgs` for Intel/AMD uses `-hwaccel_output_format vaapi`, placing decoded frames in VAAPI GPU memory. `getUpscaleFilter` returned a software `scale=W:H:flags=lanczos` filter for non-NVIDIA, and `getVideoEncoderArgs` composed this as `scale=W:H:flags=lanczos,hwupload` — a software filter cannot process frames already in VAAPI hardware format, causing FFmpeg exit 218. Fixed: `getUpscaleFilter` now returns `scale_vaapi=W:H` for Intel/AMD (GPU-native, handles HDR/10-bit natively). `getVideoEncoderArgs` no longer appends `hwupload` after the scale filter for the upscaling path, since frames are already on GPU.
+
 ---
 
 ## 📊 Priority Summary
@@ -165,7 +175,7 @@ The project is in a **solid foundation state** with the core backend functionali
 | 🔴 Critical | 0 | 4 |
 | 🟠 High | 0 | 7 |
 | 🟡 Medium | 0 | 7 |
-| 🟢 Low | 0 | 9 |
+| 🟢 Low | 0 | 11 |
 
 **All known bugs resolved as of 2026-02-27.**
 

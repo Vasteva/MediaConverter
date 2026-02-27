@@ -141,7 +141,9 @@ func (f *FFmpegWrapper) getHWAccelInputArgs(vendor GPUVendor) []string {
 	}
 }
 
-// getUpscaleFilter returns the video filter string for upscaling
+// getUpscaleFilter returns the video filter string for upscaling.
+// Must be GPU-aware: Intel/AMD decode with -hwaccel_output_format vaapi, so frames
+// are already in VAAPI GPU memory and require scale_vaapi (not the software scale filter).
 func (f *FFmpegWrapper) getUpscaleFilter(opts TranscodeOptions) string {
 	if !opts.Upscale {
 		return ""
@@ -152,15 +154,16 @@ func (f *FFmpegWrapper) getUpscaleFilter(opts TranscodeOptions) string {
 		targetW, targetH = 3840, 2160
 	}
 
-	// For maximum premium "WOW", we use high-quality Lanczos scaling
-	filter := fmt.Sprintf("scale=%d:%d:flags=lanczos", targetW, targetH)
-
-	// If the user has a GPU, we can try hardware accelerated scaling
-	if opts.GPUVendor == GPUVendorNvidia {
-		filter = fmt.Sprintf("scale_cuda=%d:%d", targetW, targetH)
+	switch opts.GPUVendor {
+	case GPUVendorNvidia:
+		return fmt.Sprintf("scale_cuda=%d:%d", targetW, targetH)
+	case GPUVendorIntel, GPUVendorAMD:
+		// Frames are already in VAAPI format from hwaccel; scale_vaapi operates on
+		// GPU frames directly and handles HDR/10-bit content natively.
+		return fmt.Sprintf("scale_vaapi=%d:%d", targetW, targetH)
+	default:
+		return fmt.Sprintf("scale=%d:%d:flags=lanczos", targetW, targetH)
 	}
-
-	return filter
 }
 
 // getVideoEncoderArgs returns video encoder arguments based on GPU vendor
@@ -183,9 +186,14 @@ func (f *FFmpegWrapper) getVideoEncoderArgs(opts TranscodeOptions) []string {
 			"-tier", "high",
 		)
 	case GPUVendorIntel, GPUVendorAMD:
+		// With -hwaccel_output_format vaapi, decoded frames are already on the GPU.
+		// scale_vaapi operates on those frames directly — appending hwupload would
+		// fail (can't upload frames that are already in hardware format).
+		// hwupload is kept for the no-upscale path as a safety net for any stream
+		// that falls back to software decoding.
 		filter := "hwupload"
 		if upscaleFilter != "" {
-			filter = upscaleFilter + ",hwupload"
+			filter = upscaleFilter // scale_vaapi; no hwupload needed
 		}
 		args = append(args,
 			"-c:v", "hevc_vaapi",
