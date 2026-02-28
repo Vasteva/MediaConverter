@@ -11,6 +11,8 @@ interface DiscoveredFile {
     estimatedOutputBytes: number;
     estimatedSavingsBytes: number;
     estimatedSavingsPct: number;
+    videoWidth?: number;
+    videoHeight?: number;
 }
 
 function formatBytes(bytes: number): string {
@@ -54,7 +56,7 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
     const [isQueuing, setIsQueuing] = useState(false);
     const [queueResult, setQueueResult] = useState<string | null>(null);
     const [filterType, setFilterType] = useState<'all' | 'optimize' | 'extract'>('all');
-    type SortField = 'name' | 'sizeBytes' | 'estimatedSavingsPct' | 'jobType';
+    type SortField = 'name' | 'sizeBytes' | 'estimatedSavingsPct' | 'jobType' | 'videoHeight';
     const [sortField, setSortField] = useState<SortField>('name');
     const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
@@ -66,6 +68,7 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
             if (sortField === 'name') cmp = a.name.localeCompare(b.name);
             else if (sortField === 'sizeBytes') cmp = a.sizeBytes - b.sizeBytes;
             else if (sortField === 'estimatedSavingsPct') cmp = a.estimatedSavingsPct - b.estimatedSavingsPct;
+            else if (sortField === 'videoHeight') cmp = (a.videoHeight ?? 0) - (b.videoHeight ?? 0);
             else cmp = a.jobType.localeCompare(b.jobType);
             return sortDir === 'asc' ? cmp : -cmp;
         });
@@ -368,6 +371,34 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
                                 )}
                             </div>
                         </div>
+
+                        <div className="form-group">
+                            <label className="label mb-2 block">Skip High Resolution Files</label>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={config.skipHighResolution ?? false}
+                                    onChange={e => setConfig({ ...config, skipHighResolution: e.target.checked })}
+                                    className="w-4 h-4"
+                                />
+                                <span className="text-secondary text-sm">Skip files already at or above target resolution</span>
+                            </label>
+                            {config.skipHighResolution && (
+                                <div className="mt-2">
+                                    <label className="label text-xs mb-1 block">Height threshold (lines)</label>
+                                    <input
+                                        type="number"
+                                        className="input text-sm"
+                                        value={config.resolutionHeightThreshold ?? 1080}
+                                        onChange={e => setConfig({ ...config, resolutionHeightThreshold: parseInt(e.target.value) || 1080 })}
+                                        min="240"
+                                        max="4320"
+                                        style={{ width: '120px' }}
+                                    />
+                                    <p className="text-xs text-secondary mt-1">Files with video height ≥ this value will be skipped (e.g. 1080 skips 1080p+)</p>
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
 
@@ -576,6 +607,10 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
                                             style={{ width: '100px', textAlign: 'right', padding: '0.75rem 1rem', fontWeight: 600, fontSize: '0.85rem', color: sortField === 'sizeBytes' ? 'var(--text-primary)' : 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', cursor: 'pointer', userSelect: 'none' }}
                                         >Size{sortIcon('sizeBytes')}</th>
                                         <th
+                                            onClick={() => handleSort('videoHeight')}
+                                            style={{ width: '100px', textAlign: 'right', padding: '0.75rem 1rem', fontWeight: 600, fontSize: '0.85rem', color: sortField === 'videoHeight' ? 'var(--text-primary)' : 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', cursor: 'pointer', userSelect: 'none' }}
+                                        >Resolution{sortIcon('videoHeight')}</th>
+                                        <th
                                             onClick={() => handleSort('estimatedSavingsPct')}
                                             style={{ width: '120px', textAlign: 'right', padding: '0.75rem 1rem', fontWeight: 600, fontSize: '0.85rem', color: sortField === 'estimatedSavingsPct' ? 'var(--text-primary)' : 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', cursor: 'pointer', userSelect: 'none' }}
                                         >Est. Savings{sortIcon('estimatedSavingsPct')}</th>
@@ -614,6 +649,11 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
                                                 </td>
                                                 <td style={{ padding: '0.875rem 1rem', textAlign: 'right', borderBottom: '1px solid var(--border-color)', fontFamily: 'monospace', fontSize: '0.85rem' }}>
                                                     {formatBytes(file.sizeBytes)}
+                                                </td>
+                                                <td style={{ padding: '0.875rem 1rem', textAlign: 'right', borderBottom: '1px solid var(--border-color)', fontFamily: 'monospace', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                                                    {file.videoWidth && file.videoHeight
+                                                        ? `${file.videoWidth}×${file.videoHeight}`
+                                                        : file.jobType === 'optimize' ? '—' : ''}
                                                 </td>
                                                 <td style={{ padding: '0.875rem 1rem', textAlign: 'right', borderBottom: '1px solid var(--border-color)' }}>
                                                     {file.estimatedSavingsPct > 0 ? (

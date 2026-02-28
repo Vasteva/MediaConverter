@@ -272,18 +272,31 @@ func (f *FFmpegWrapper) GetMediaInfo(ctx context.Context, path string) (*MediaIn
 			Duration string `json:"duration"`
 			Size     string `json:"size"`
 		} `json:"format"`
+		Streams []struct {
+			CodecType string `json:"codec_type"`
+			Width     int    `json:"width"`
+			Height    int    `json:"height"`
+		} `json:"streams"`
 	}
 
 	if err := json.Unmarshal(output, &probeData); err == nil {
 		duration, _ := strconv.ParseFloat(probeData.Format.Duration, 64)
 		size, _ := strconv.ParseInt(probeData.Format.Size, 10, 64)
-		return &MediaInfo{
+		info := &MediaInfo{
 			Path:     path,
 			Filename: filepath.Base(path),
 			Duration: duration,
 			Size:     size,
 			RawJSON:  string(output),
-		}, nil
+		}
+		for _, s := range probeData.Streams {
+			if s.CodecType == "video" && s.Width > 0 && s.Height > 0 {
+				info.VideoWidth = s.Width
+				info.VideoHeight = s.Height
+				break
+			}
+		}
+		return info, nil
 	}
 
 	return &MediaInfo{
@@ -295,9 +308,11 @@ func (f *FFmpegWrapper) GetMediaInfo(ctx context.Context, path string) (*MediaIn
 
 // MediaInfo contains metadata about a media file
 type MediaInfo struct {
-	Path     string
-	Filename string
-	Duration float64
-	Size     int64
-	RawJSON  string
+	Path        string
+	Filename    string
+	Duration    float64
+	Size        int64
+	RawJSON     string
+	VideoWidth  int
+	VideoHeight int
 }

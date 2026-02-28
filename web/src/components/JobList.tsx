@@ -13,6 +13,14 @@ interface JobListProps {
 
 type FilterType = 'all' | 'active' | 'completed' | 'failed';
 
+function formatBytes(bytes: number): string {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+}
+
 export default function JobList({ jobs, onCreateJob, onCancelJob, subtitleMode = 'selective', sourceDir, destDir }: JobListProps) {
     const [filter, setFilter] = useState<FilterType>('all');
     const [showCreateModal, setShowCreateModal] = useState(false);
@@ -235,11 +243,27 @@ export default function JobList({ jobs, onCreateJob, onCancelJob, subtitleMode =
                                             <tr style={{ background: 'var(--bg-secondary)' }}>
                                                 <td colSpan={6} style={{ padding: '0 1.5rem 1rem' }}>
                                                     <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', paddingTop: '0.75rem', fontWeight: 500 }}>
-                                                        AI Operations
+                                                        Activity Log
                                                     </div>
+                                                    {job.status === 'completed' && (job.inputSize || job.outputSize) ? (
+                                                        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginBottom: '0.75rem', padding: '0.5rem 0.75rem', background: 'var(--bg-tertiary)', borderRadius: '6px', fontSize: '0.8125rem' }}>
+                                                            <span style={{ color: 'var(--text-secondary)' }}>
+                                                                Input: <span style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{job.inputSize ? formatBytes(job.inputSize) : '—'}</span>
+                                                            </span>
+                                                            <span style={{ color: 'var(--text-secondary)' }}>→</span>
+                                                            <span style={{ color: 'var(--text-secondary)' }}>
+                                                                Output: <span style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{job.outputSize ? formatBytes(job.outputSize) : '—'}</span>
+                                                            </span>
+                                                            {job.inputSize && job.outputSize && job.inputSize > 0 ? (
+                                                                <span style={{ color: job.outputSize < job.inputSize ? 'var(--status-completed)' : 'var(--text-secondary)', fontWeight: 600 }}>
+                                                                    ({Math.round((1 - job.outputSize / job.inputSize) * 100)}% smaller)
+                                                                </span>
+                                                            ) : null}
+                                                        </div>
+                                                    ) : null}
                                                     {!job.aiLogs || job.aiLogs.length === 0 ? (
                                                         <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', fontStyle: 'italic', margin: '0 0 0.5rem' }}>
-                                                            No AI operations recorded for this job.
+                                                            No activity recorded for this job.
                                                         </p>
                                                     ) : (
                                                         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8125rem' }}>
@@ -254,33 +278,36 @@ export default function JobList({ jobs, onCreateJob, onCancelJob, subtitleMode =
                                                                 </tr>
                                                             </thead>
                                                             <tbody>
-                                                                {job.aiLogs.map((log, i) => (
-                                                                    <tr key={i} style={{ borderBottom: '1px solid var(--border-color)', opacity: 0.9 }}>
-                                                                        <td style={{ padding: '4px 8px', whiteSpace: 'nowrap' }}>
-                                                                            {new Date(log.timestamp).toLocaleTimeString()}
-                                                                        </td>
-                                                                        <td style={{ padding: '4px 8px' }}>
-                                                                            <span style={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>
-                                                                                {log.operation.replace(/_/g, ' ')}
-                                                                            </span>
-                                                                        </td>
-                                                                        <td style={{ padding: '4px 8px', color: 'var(--text-secondary)' }}>
-                                                                            {log.provider}
-                                                                        </td>
-                                                                        <td style={{ padding: '4px 8px' }} title={log.error || ''}>
-                                                                            {log.detail}
-                                                                            {log.error && (
-                                                                                <span className="text-xs text-danger ml-2">({log.error})</span>
-                                                                            )}
-                                                                        </td>
-                                                                        <td style={{ padding: '4px 8px', textAlign: 'right', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>
-                                                                            {log.durationMs}ms
-                                                                        </td>
-                                                                        <td style={{ padding: '4px 8px', textAlign: 'center' }}>
-                                                                            {log.success ? '✓' : '✗'}
-                                                                        </td>
-                                                                    </tr>
-                                                                ))}
+                                                                {job.aiLogs.map((log, i) => {
+                                                                    const isSystem = log.provider === 'System';
+                                                                    return (
+                                                                        <tr key={i} style={{ borderBottom: '1px solid var(--border-color)', opacity: isSystem ? 0.7 : 0.9 }}>
+                                                                            <td style={{ padding: '4px 8px', whiteSpace: 'nowrap', color: isSystem ? 'var(--text-secondary)' : undefined }}>
+                                                                                {new Date(log.timestamp).toLocaleTimeString()}
+                                                                            </td>
+                                                                            <td style={{ padding: '4px 8px' }}>
+                                                                                <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: isSystem ? 'var(--text-secondary)' : undefined }}>
+                                                                                    {log.operation.replace(/_/g, ' ')}
+                                                                                </span>
+                                                                            </td>
+                                                                            <td style={{ padding: '4px 8px', color: 'var(--text-secondary)' }}>
+                                                                                {log.provider}
+                                                                            </td>
+                                                                            <td style={{ padding: '4px 8px', color: isSystem ? 'var(--text-secondary)' : undefined }} title={log.error || ''}>
+                                                                                {log.detail}
+                                                                                {log.error && (
+                                                                                    <span className="text-xs text-danger ml-2">({log.error})</span>
+                                                                                )}
+                                                                            </td>
+                                                                            <td style={{ padding: '4px 8px', textAlign: 'right', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>
+                                                                                {log.durationMs > 0 ? `${log.durationMs}ms` : '—'}
+                                                                            </td>
+                                                                            <td style={{ padding: '4px 8px', textAlign: 'center' }}>
+                                                                                {log.success ? '✓' : '✗'}
+                                                                            </td>
+                                                                        </tr>
+                                                                    );
+                                                                })}
                                                             </tbody>
                                                         </table>
                                                     )}

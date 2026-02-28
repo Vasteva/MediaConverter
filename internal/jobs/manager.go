@@ -243,6 +243,18 @@ func (m *Manager) GetAllJobs() []*Job {
 	return result
 }
 
+// GetVideoResolution returns the video width and height for a media file using ffprobe.
+func (m *Manager) GetVideoResolution(ctx context.Context, path string) (width, height int, err error) {
+	if m.ffmpeg == nil {
+		return 0, 0, fmt.Errorf("ffmpeg not available")
+	}
+	info, err := m.ffmpeg.GetMediaInfo(ctx, path)
+	if err != nil {
+		return 0, 0, err
+	}
+	return info.VideoWidth, info.VideoHeight, nil
+}
+
 func (m *Manager) CancelJob(id string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -395,6 +407,16 @@ func (m *Manager) processJob(job *Job) {
 				TitleIndex: mainTitleIdx,
 			}
 
+			t0Extract := time.Now()
+			m.appendAILog(job, AILog{
+				Timestamp:  t0Extract,
+				Operation:  "extraction_start",
+				Provider:   "System",
+				Detail:     fmt.Sprintf("Starting MakeMKV extraction of %s", filepath.Base(cleanPath)),
+				DurationMs: 0,
+				Success:    true,
+			})
+
 			err = m.makemkv.ExtractWithProgress(job.ctx, opts, func(p media.TranscodeProgress) {
 				m.updateJob(job, func(j *Job) {
 					j.Progress = p.Percentage / 2 // First 50%
@@ -416,6 +438,14 @@ func (m *Manager) processJob(job *Job) {
 			// Proceed to optimize using the extracted file
 			extractedSource := files[0]
 			log.Printf("[Job %s] Extraction complete. Proceeding to optimize: %s", job.ID, extractedSource)
+			m.appendAILog(job, AILog{
+				Timestamp:  t0Extract,
+				Operation:  "extraction_complete",
+				Provider:   "System",
+				Detail:     fmt.Sprintf("Extraction complete (%s), proceeding to optimize", time.Since(t0Extract).Round(time.Second)),
+				DurationMs: time.Since(t0Extract).Milliseconds(),
+				Success:    true,
+			})
 
 			m.updateJob(job, func(j *Job) {
 				j.StatusDetail = "Optimizing"
@@ -674,6 +704,15 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 	}
 
 	log.Printf("[Job %s] Starting ffmpeg transcoding to: %s", job.ID, opts.OutputPath)
+	t0Trans := time.Now()
+	m.appendAILog(job, AILog{
+		Timestamp:  t0Trans,
+		Operation:  "transcoding_start",
+		Provider:   "System",
+		Detail:     fmt.Sprintf("Starting FFmpeg transcoding → %s", filepath.Base(opts.OutputPath)),
+		DurationMs: 0,
+		Success:    true,
+	})
 
 	err = m.ffmpeg.TranscodeWithProgress(job.ctx, opts, func(p media.TranscodeProgress) {
 		m.updateJob(job, func(j *Job) {
@@ -688,6 +727,14 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 	}
 
 	log.Printf("[Job %s] Transcoding completed successfully", job.ID)
+	m.appendAILog(job, AILog{
+		Timestamp:  t0Trans,
+		Operation:  "transcoding_complete",
+		Provider:   "System",
+		Detail:     fmt.Sprintf("Transcoding complete (%s)", time.Since(t0Trans).Round(time.Second)),
+		DurationMs: time.Since(t0Trans).Milliseconds(),
+		Success:    true,
+	})
 
 	// 3. Subtitle Download
 	subtitleMode := m.config.SubtitleMode
@@ -794,9 +841,10 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 				Success:    true,
 			})
 		}
-	} else if !verifyOutput {
-		// Verification disabled: still require the output file to exist and be
-		// non-empty before allowing source deletion, to guard against silent failures.
+	} else {
+		// AI verification not available (not premium, no AI, or verifyOutput disabled).
+		// Still require the output file to exist and be non-empty before allowing
+		// source deletion, to guard against silent failures.
 		if info, statErr := os.Stat(destPath); statErr == nil && info.Size() > 0 {
 			verified = true
 		} else {
@@ -810,6 +858,15 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 			log.Printf("[Job %s] Deleting source file: %s", job.ID, sourcePath)
 			if err := os.Remove(sourcePath); err != nil {
 				log.Printf("Warning: Failed to delete source file: %v", err)
+			} else {
+				m.appendAILog(job, AILog{
+					Timestamp:  time.Now(),
+					Operation:  "file_deleted",
+					Provider:   "System",
+					Detail:     fmt.Sprintf("Source file deleted: %s", sourcePath),
+					DurationMs: 0,
+					Success:    true,
+				})
 			}
 		} else {
 			log.Printf("[Job %s] SKIPPING deletion. Verification failed or not run.", job.ID)

@@ -59,6 +59,10 @@ type ScannerConfig struct {
 	// File type handling
 	ExtractExtensions  []string `json:"extractExtensions"`  // e.g., [".iso"]
 	OptimizeExtensions []string `json:"optimizeExtensions"` // e.g., [".mkv", ".mp4", ".avi"]
+
+	// Resolution filtering
+	SkipHighResolution        bool `json:"skipHighResolution"`
+	ResolutionHeightThreshold int  `json:"resolutionHeightThreshold"` // default 1080
 }
 
 func (c *ScannerConfig) Validate() {
@@ -76,6 +80,9 @@ func (c *ScannerConfig) Validate() {
 	}
 	if c.Mode == "" {
 		c.Mode = ScanModeManual
+	}
+	if c.SkipHighResolution && c.ResolutionHeightThreshold == 0 {
+		c.ResolutionHeightThreshold = 1080
 	}
 }
 
@@ -539,6 +546,15 @@ func (s *Scanner) createJobForFile(path string) error {
 		return nil
 	}
 
+	// Skip high-resolution files for optimize jobs if configured
+	if jobType == jobs.JobTypeOptimize && s.config.SkipHighResolution {
+		if s.isHighResolution(path, s.config.ResolutionHeightThreshold) {
+			log.Printf("[Scanner] Skipping %s: resolution >= %dp", path, s.config.ResolutionHeightThreshold)
+			s.processedDB.MarkProcessed(ProcessedFile{Path: path, JobType: string(jobType)})
+			return nil
+		}
+	}
+
 	// Generate output path
 	outputPath := s.generateOutputPath(path, jobType)
 
@@ -762,14 +778,28 @@ func (s *Scanner) periodicScan() {
 
 // DiscoveredFile represents a file found during a discovery scan
 type DiscoveredFile struct {
-	Path                 string  `json:"path"`
-	Name                 string  `json:"name"`
-	SizeBytes            int64   `json:"sizeBytes"`
-	Extension            string  `json:"extension"`
-	JobType              string  `json:"jobType"` // "optimize" or "extract"
-	EstimatedOutputBytes int64   `json:"estimatedOutputBytes"`
-	EstimatedSavingsBytes int64  `json:"estimatedSavingsBytes"`
-	EstimatedSavingsPct  float64 `json:"estimatedSavingsPct"`
+	Path                  string  `json:"path"`
+	Name                  string  `json:"name"`
+	SizeBytes             int64   `json:"sizeBytes"`
+	Extension             string  `json:"extension"`
+	JobType               string  `json:"jobType"` // "optimize" or "extract"
+	EstimatedOutputBytes  int64   `json:"estimatedOutputBytes"`
+	EstimatedSavingsBytes int64   `json:"estimatedSavingsBytes"`
+	EstimatedSavingsPct   float64 `json:"estimatedSavingsPct"`
+	VideoWidth            int     `json:"videoWidth"`
+	VideoHeight           int     `json:"videoHeight"`
+}
+
+// isHighResolution returns true if the video at path has a height >= threshold.
+// On any error (e.g. ffprobe unavailable) it returns false so the file is included.
+func (s *Scanner) isHighResolution(path string, threshold int) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, height, err := s.jobManager.GetVideoResolution(ctx, path)
+	if err != nil {
+		return false
+	}
+	return height >= threshold
 }
 
 // Discover scans all watch directories and returns files that would be processed,
@@ -816,6 +846,18 @@ func (s *Scanner) Discover() ([]DiscoveredFile, error) {
 				continue
 			}
 
+			// Probe video resolution for optimize jobs and apply high-res filter
+			var videoWidth, videoHeight int
+			if jobType == "optimize" {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				w, h, _ := s.jobManager.GetVideoResolution(ctx, path)
+				cancel()
+				videoWidth, videoHeight = w, h
+				if s.config.SkipHighResolution && h >= s.config.ResolutionHeightThreshold {
+					continue
+				}
+			}
+
 			estimatedOutput, pct := estimateSavings(ext, info.Size())
 
 			result = append(result, DiscoveredFile{
@@ -827,6 +869,8 @@ func (s *Scanner) Discover() ([]DiscoveredFile, error) {
 				EstimatedOutputBytes:  estimatedOutput,
 				EstimatedSavingsBytes: info.Size() - estimatedOutput,
 				EstimatedSavingsPct:   pct,
+				VideoWidth:            videoWidth,
+				VideoHeight:           videoHeight,
 			})
 		}
 	}

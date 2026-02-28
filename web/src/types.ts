@@ -1,6 +1,6 @@
 export interface AILog {
     timestamp: string;
-    operation: 'metadata_cleaning' | 'encoding_analysis' | 'subtitle_download' | 'verification';
+    operation: 'metadata_cleaning' | 'encoding_analysis' | 'subtitle_download' | 'verification' | 'transcoding_start' | 'transcoding_complete' | 'extraction_start' | 'extraction_complete' | 'file_deleted';
     provider: string;
     detail: string;
     durationMs: number;
@@ -93,6 +93,8 @@ export interface ScannerConfig {
     outputDirectory: string;
     extractExtensions: string[];
     optimizeExtensions: string[];
+    skipHighResolution?: boolean;
+    resolutionHeightThreshold?: number;
 }
 export interface SystemStats {
     cpuUsage: number;
