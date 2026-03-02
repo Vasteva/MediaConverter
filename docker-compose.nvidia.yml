@@ -22,8 +22,10 @@ services:
     #   - /dev/sr0:/dev/sr0
     deploy:
       resources:
+        limits:
+          memory: 12G
         reservations:
           devices:
             - driver: nvidia
               count: all
-              capabilities: [gpu, video]
+              capabilities: [ gpu, video ]

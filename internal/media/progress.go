@@ -36,23 +36,38 @@ func (f *FFmpegWrapper) TranscodeWithProgress(ctx context.Context, opts Transcod
 
 	cmd := exec.CommandContext(ctx, f.ffmpegPath, args...)
 
-	// Capture stderr for progress
+	// Capture stderr for progress and error reporting
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return fmt.Errorf("failed to create stderr pipe: %w", err)
 	}
+
+	// Buffer to capture output for better error reporting
+	var outputBuffer strings.Builder
 
 	// Start the command
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start ffmpeg: %w", err)
 	}
 
-	// Parse progress in a goroutine
-	go f.parseProgress(stderr, opts.TotalDuration, callback)
+	// Parse progress while also capturing output to our buffer
+	parseDone := make(chan struct{})
+	go func() {
+		f.parseProgress(io.TeeReader(stderr, &outputBuffer), opts.TotalDuration, callback)
+		close(parseDone)
+	}()
 
 	// Wait for completion
-	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("ffmpeg failed: %w", err)
+	waitErr := cmd.Wait()
+	<-parseDone // Ensure parsing is finished
+
+	if waitErr != nil {
+		// Include the last bit of output in the error message
+		output := outputBuffer.String()
+		if len(output) > 2000 {
+			output = "..." + output[len(output)-2000:]
+		}
+		return fmt.Errorf("ffmpeg failed: %w\nOutput:\n%s", waitErr, output)
 	}
 
 	return nil
