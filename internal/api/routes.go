@@ -365,6 +365,16 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		return c.Status(404).JSON(fiber.Map{"error": "Job not found"})
 	})
 
+	api.Post("/jobs/:id/retry", func(c *fiber.Ctx) error {
+		if jm == nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Job manager not initialized"})
+		}
+		if err := jm.RetryJob(c.Params("id")); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+		return c.JSON(fiber.Map{"success": true})
+	})
+
 	// Config
 	api.Get("/config", func(c *fiber.Ctx) error {
 		subtitleAPIKey := ""

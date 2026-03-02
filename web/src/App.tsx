@@ -247,6 +247,23 @@ function App() {
     }
   }, [authFetch, fetchJobs]);
 
+  // Retry job
+  const retryJob = useCallback(async (jobId: string) => {
+    try {
+      const response = await authFetch(`/api/jobs/${jobId}/retry`, {
+        method: 'POST',
+      });
+      if (response.ok) {
+        await fetchJobs();
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('Failed to retry job:', error);
+      return false;
+    }
+  }, [authFetch, fetchJobs]);
+
   // Update System Config
   const updateSystemConfig = useCallback(async (newConfig: Partial<SystemConfig>) => {
     try {
@@ -333,6 +350,7 @@ function App() {
             jobs={jobs}
             onCreateJob={createJob}
             onCancelJob={cancelJob}
+            onRetryJob={retryJob}
             subtitleMode={config?.subtitleMode}
             sourceDir={config?.sourceDir}
             destDir={config?.destDir}

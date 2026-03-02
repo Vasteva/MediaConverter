@@ -413,7 +413,7 @@ func (s *Scanner) ScanAll() error {
 	}
 
 	s.statusMu.Lock()
-	s.status.LastResult = fmt.Sprintf("Scan complete: %d files found, %d jobs created", filesFound, jobsCreated)
+	s.status.LastResult = fmt.Sprintf("Scan complete: %d media files found, %d jobs created", filesFound, jobsCreated)
 	if len(allErrors) > 0 {
 		s.status.LastError = fmt.Sprintf("Completed with %d errors", len(allErrors))
 		s.statusMu.Unlock()
@@ -431,12 +431,21 @@ func (s *Scanner) ScanAll() error {
 func (s *Scanner) scanDirectory(watchDir WatchDirectory) ([]string, error) {
 	var files []string
 
+	// Build combined set of known extensions for fast pre-filtering
+	knownExts := make(map[string]bool, len(s.config.ExtractExtensions)+len(s.config.OptimizeExtensions))
+	for _, e := range s.config.ExtractExtensions {
+		knownExts[strings.ToLower(e)] = true
+	}
+	for _, e := range s.config.OptimizeExtensions {
+		knownExts[strings.ToLower(e)] = true
+	}
+
 	walkFunc := func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 
-		// Skip directories
+		// Handle directories
 		if info.IsDir() {
 			// If not recursive and not the root directory, skip
 			if !watchDir.Recursive && path != watchDir.Path {
@@ -449,7 +458,13 @@ func (s *Scanner) scanDirectory(watchDir WatchDirectory) ([]string, error) {
 			return nil
 		}
 
-		// Check if file matches patterns
+		// Pre-filter: skip files with unknown extensions immediately
+		ext := strings.ToLower(filepath.Ext(path))
+		if !knownExts[ext] {
+			return nil
+		}
+
+		// Check if file matches user-defined include/exclude patterns
 		if s.matchesPatterns(path, watchDir) {
 			files = append(files, path)
 		}
@@ -708,6 +723,14 @@ func (s *Scanner) watchFiles() {
 
 // handleNewFile processes a newly created file
 func (s *Scanner) handleNewFile(path string) {
+	// Pre-filter by known extension before doing expensive directory/pattern checks
+	ext := strings.ToLower(filepath.Ext(path))
+	knownExt := s.containsExtension(s.config.ExtractExtensions, ext) ||
+		s.containsExtension(s.config.OptimizeExtensions, ext)
+	if !knownExt {
+		return
+	}
+
 	// Find matching watch directory
 	for _, watchDir := range s.config.WatchDirectories {
 		if s.isInDirectory(path, watchDir.Path) && s.matchesPatterns(path, watchDir) {

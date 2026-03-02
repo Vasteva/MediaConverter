@@ -263,12 +263,60 @@ func (m *Manager) GetVideoResolution(ctx context.Context, path string) (width, h
 func (m *Manager) CancelJob(id string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if job, ok := m.jobs[id]; ok && job.cancel != nil {
-		job.cancel()
+	if job, ok := m.jobs[id]; ok {
+		if job.cancel != nil {
+			job.cancel()
+		}
 		job.Status = StatusCancelled
+		m.Save()
+		if m.OnJobUpdate != nil {
+			m.OnJobUpdate(job)
+		}
 		return true
 	}
 	return false
+}
+
+// RetryJob resets a job and adds it back to the priority queue
+func (m *Manager) RetryJob(id string) error {
+	m.mu.Lock()
+	job, ok := m.jobs[id]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("job not found")
+	}
+
+	job.mu.Lock()
+	if job.Status == StatusProcessing {
+		job.mu.Unlock()
+		m.mu.Unlock()
+		return fmt.Errorf("job is already processing")
+	}
+
+	// Reset job state for retry
+	job.Status = StatusPending
+	job.StatusDetail = "Retrying"
+	job.Progress = 0
+	job.Error = ""
+	job.StartedAt = time.Time{}
+	job.CompletedAt = time.Time{}
+	job.RetryCount++
+	job.Verified = false
+	job.mu.Unlock()
+	m.mu.Unlock()
+
+	m.Save()
+	if m.OnJobUpdate != nil {
+		m.OnJobUpdate(job)
+	}
+
+	// Add to priority queue
+	m.pqMu.Lock()
+	heap.Push(&m.pq, job)
+	m.pqMu.Unlock()
+	m.pqCond.Signal()
+
+	return nil
 }
 
 func (m *Manager) UpdateAIProvider(provider ai.Provider) {

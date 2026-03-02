@@ -6,6 +6,7 @@ interface JobListProps {
     jobs: Job[];
     onCreateJob: (job: Partial<Job>) => Promise<boolean>;
     onCancelJob: (jobId: string) => Promise<boolean>;
+    onRetryJob: (jobId: string) => Promise<boolean>;
     subtitleMode?: 'always' | 'selective' | 'never';
     sourceDir?: string;
     destDir?: string;
@@ -21,7 +22,7 @@ function formatBytes(bytes: number): string {
     return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
 }
 
-export default function JobList({ jobs, onCreateJob, onCancelJob, subtitleMode = 'selective', sourceDir, destDir }: JobListProps) {
+export default function JobList({ jobs, onCreateJob, onCancelJob, onRetryJob, subtitleMode = 'selective', sourceDir, destDir }: JobListProps) {
     const [filter, setFilter] = useState<FilterType>('all');
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
@@ -237,15 +238,42 @@ export default function JobList({ jobs, onCreateJob, onCancelJob, subtitleMode =
                                                                 <path d="M6 18L18 6M6 6l12 12" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                                                             </svg>
                                                         </button>
-                                                    ) : null}
+                                                    ) : (
+                                                        <button
+                                                            className="btn btn-sm btn-primary"
+                                                            onClick={() => onRetryJob(job.id)}
+                                                            title="Retry/Re-run Job"
+                                                        >
+                                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ width: '16px', height: '16px' }}>
+                                                                <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                                                            </svg>
+                                                        </button>
+                                                    )}
                                                 </div>
                                             </td>
                                         </tr>
                                         {expandedJobId === job.id && (
                                             <tr style={{ background: 'var(--bg-secondary)' }}>
                                                 <td colSpan={6} style={{ padding: '0 1.5rem 1rem' }}>
-                                                    <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', paddingTop: '0.75rem', fontWeight: 500 }}>
-                                                        Activity Log
+                                                    <div className="flex justify-between items-center mb-2 pt-3">
+                                                        <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', fontWeight: 500 }}>
+                                                            Activity Log
+                                                        </div>
+                                                        {job.status !== 'processing' && job.status !== 'pending' && (
+                                                            <button
+                                                                className="btn btn-sm btn-primary flex items-center gap-1"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    onRetryJob(job.id);
+                                                                }}
+                                                                style={{ fontSize: '0.75rem', padding: '2px 8px' }}
+                                                            >
+                                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ width: '12px', height: '12px' }}>
+                                                                    <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                                                                </svg>
+                                                                Retry Job
+                                                            </button>
+                                                        )}
                                                     </div>
                                                     {job.status === 'completed' && (job.inputSize || job.outputSize) ? (
                                                         <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginBottom: '0.75rem', padding: '0.5rem 0.75rem', background: 'var(--bg-tertiary)', borderRadius: '6px', fontSize: '0.8125rem' }}>
