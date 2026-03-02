@@ -633,6 +633,9 @@ func (m *Manager) runExtraction(job *Job) error {
 	log.Printf("[Job %s] Starting disc extraction for %s", job.ID, job.SourcePath)
 
 	// 1. Scan disc to find titles
+	m.updateJob(job, func(j *Job) {
+		j.StatusDetail = "Scanning"
+	})
 	info, err := m.makemkv.ScanDisc(job.ctx, job.SourcePath)
 	if err != nil {
 		return fmt.Errorf("failed to scan disc: %v", err)
@@ -652,6 +655,9 @@ func (m *Manager) runExtraction(job *Job) error {
 	}
 
 	// 4. Run extraction
+	m.updateJob(job, func(j *Job) {
+		j.StatusDetail = "Extracting"
+	})
 	opts := media.ExtractOptions{
 		SourcePath: job.SourcePath,
 		OutputDir:  job.DestinationPath,

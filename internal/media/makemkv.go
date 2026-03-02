@@ -131,6 +131,14 @@ func (m *MakeMKVWrapper) ExtractWithProgress(ctx context.Context, opts ExtractOp
 // parseExtractProgress parses MakeMKV robot mode output for progress.
 // MakeMKV can emit very long MSG: lines; the scanner buffer is set to 1 MB to
 // prevent the default 64 KB limit from causing silent early termination.
+//
+// MakeMKV emits two progress line types:
+//
+//	PRGC:code,current,max  — progress of the *current* title being copied
+//	PRGV:current,total,max — overall progress across all titles
+//
+// We report whichever gives a higher (more informative) percentage so the bar
+// is live during the title copy rather than stuck at 0 until the copy is done.
 func (m *MakeMKVWrapper) parseExtractProgress(reader io.Reader, callback ProgressCallback) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
@@ -139,16 +147,37 @@ func (m *MakeMKVWrapper) parseExtractProgress(reader io.Reader, callback Progres
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// PRGV:current,total,max — overall extraction progress
+		// PRGC:code,current,max — current-title copy progress (updates continuously)
+		if strings.HasPrefix(line, "PRGC:") {
+			parts := strings.Split(strings.TrimPrefix(line, "PRGC:"), ",")
+			if len(parts) >= 3 {
+				current, _ := strconv.ParseFloat(parts[1], 64)
+				max, _ := strconv.ParseFloat(parts[2], 64)
+				if max > 0 {
+					pct := int((current / max) * 100)
+					if pct > progress.Percentage {
+						progress.Percentage = pct
+						if callback != nil {
+							callback(progress)
+						}
+					}
+				}
+			}
+		}
+
+		// PRGV:current,total,max — overall extraction progress across all titles
 		if strings.HasPrefix(line, "PRGV:") {
 			parts := strings.Split(strings.TrimPrefix(line, "PRGV:"), ",")
 			if len(parts) >= 3 {
 				total, _ := strconv.ParseFloat(parts[1], 64)
 				max, _ := strconv.ParseFloat(parts[2], 64)
 				if max > 0 {
-					progress.Percentage = int((total / max) * 100)
-					if callback != nil {
-						callback(progress)
+					pct := int((total / max) * 100)
+					if pct > progress.Percentage {
+						progress.Percentage = pct
+						if callback != nil {
+							callback(progress)
+						}
 					}
 				}
 			}

@@ -193,7 +193,9 @@ export default function JobList({ jobs, onCreateJob, onCancelJob, subtitleMode =
                                             <td>
                                                 <div className="flex flex-col gap-1">
                                                     <span className={`badge badge-${job.status}`} title={job.error || ''}>
-                                                        {job.status === 'processing' && job.statusDetail ? job.statusDetail : job.status}
+                                                        {(job.status === 'processing' || job.status === 'pending') && job.statusDetail
+                                                            ? job.statusDetail
+                                                            : job.status}
                                                     </span>
                                                     {(job.retryCount ?? 0) > 0 && (
                                                         <span className="text-xs text-secondary">
@@ -215,7 +217,7 @@ export default function JobList({ jobs, onCreateJob, onCancelJob, subtitleMode =
                                                     <div className="flex justify-between mt-1 text-xs text-secondary">
                                                         <span>{job.progress}%</span>
                                                         {job.status === 'processing' && (
-                                                            <span>{job.statusDetail ? job.statusDetail : ''} {job.eta} ({job.fps.toFixed(0)} fps)</span>
+                                                            <span>{job.statusDetail ? job.statusDetail : ''} {job.eta} {job.fps > 0 ? `(${job.fps.toFixed(0)} fps)` : ''}</span>
                                                         )}
                                                     </div>
                                                 </div>
