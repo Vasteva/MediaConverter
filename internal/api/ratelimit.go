@@ -6,12 +6,12 @@ import (
 )
 
 type rateLimitEntry struct {
-	attempts int
+	attempts  int
 	lastReset time.Time
 }
 
 type RateLimiter struct {
-	mu sync.Mutex
+	mu  sync.Mutex
 	ips map[string]*rateLimitEntry
 }
 

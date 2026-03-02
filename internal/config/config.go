@@ -65,8 +65,9 @@ type Config struct {
 	SubtitlePassword string `json:"subtitlePassword"` // OpenSubtitles account password
 
 	// Processing
-	VerifyOutput bool `json:"verifyOutput"` // Default: false (Pro only)
-	DeleteSource bool `json:"deleteSource"` // Default: false
+	VerifyOutput   bool `json:"verifyOutput"`   // Default: false (Pro only)
+	DeleteSource   bool `json:"deleteSource"`   // Default: false
+	AutoConvertISO bool `json:"autoConvertISO"` // Default: false
 
 	// Scheduling
 	Schedule ProcessingSchedule `json:"schedule"`
@@ -105,6 +106,7 @@ func Load() *Config {
 		SubtitleAPIKey:       getEnv("SUBTITLE_API_KEY", ""),
 		SubtitleUsername:     getEnv("SUBTITLE_USERNAME", ""),
 		SubtitlePassword:     getEnv("SUBTITLE_PASSWORD", ""),
+		AutoConvertISO:       getEnvBool("AUTO_CONVERT_ISO", false),
 	}
 
 	if cfg.GPUVendor == "auto" || cfg.GPUVendor == "" {
@@ -221,6 +223,9 @@ func (c *Config) loadFromDisk() error {
 	}
 	if hasBool("deleteSource") {
 		c.DeleteSource = importJSON.DeleteSource
+	}
+	if hasBool("autoConvertISO") {
+		c.AutoConvertISO = importJSON.AutoConvertISO
 	}
 
 	if importJSON.SubtitleMode != "" {

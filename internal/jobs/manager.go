@@ -40,9 +40,9 @@ const (
 
 type AILog struct {
 	Timestamp  time.Time `json:"timestamp"`
-	Operation  string    `json:"operation"`  // "metadata_cleaning" | "encoding_analysis" | "subtitle_download" | "verification"
+	Operation  string    `json:"operation"` // "metadata_cleaning" | "encoding_analysis" | "subtitle_download" | "verification"
 	Provider   string    `json:"provider"`
-	Detail     string    `json:"detail"`     // human-readable summary
+	Detail     string    `json:"detail"` // human-readable summary
 	DurationMs int64     `json:"durationMs"`
 	Success    bool      `json:"success"`
 	Error      string    `json:"error,omitempty"`
@@ -74,7 +74,7 @@ type Job struct {
 	VerifyOutput    bool         `json:"verifyOutput"` // Premium feature
 	Verified        bool         `json:"verified"`
 	DeleteSource    bool         `json:"deleteSource"`
-	MaxRetries      int          `json:"maxRetries"`  // 0 = disabled
+	MaxRetries      int          `json:"maxRetries"` // 0 = disabled
 	RetryCount      int          `json:"retryCount"`
 	AILogs          []AILog      `json:"aiLogs,omitempty"`
 
@@ -184,6 +184,11 @@ func (m *Manager) Stop() {
 // GetAI returns the current AI provider
 func (m *Manager) GetAI() ai.Provider {
 	return m.ai
+}
+
+// GetConfig returns the current configuration
+func (m *Manager) GetConfig() *config.Config {
+	return m.config
 }
 
 func (m *Manager) worker(id int) {
@@ -457,6 +462,37 @@ func (m *Manager) processJob(job *Job) {
 			// Cleanup
 			if err == nil {
 				os.RemoveAll(extractDir)
+				// If the job manager is configured to delete source, and we just converted an ISO,
+				// runOptimizationFromPath won't delete the ISO because its 'sourcePath' (extractedSource)
+				// is the intermediate MKV. We need to handle the original source deletion here.
+				if m.config.DeleteSource {
+					// We only delete if it was verified or if verifyOutput is false
+					verified := false
+					if !m.config.VerifyOutput {
+						verified = true // assume verified if check is disabled
+					} else {
+						// Re-check if verified bit was set during runOptimizationFromPath (it writes to job.Verified)
+						job.mu.RLock()
+						verified = job.Verified
+						job.mu.RUnlock()
+					}
+
+					if verified {
+						log.Printf("[Job %s] Deleting original disc image source: %s", job.ID, cleanPath)
+						if dErr := os.Remove(cleanPath); dErr != nil {
+							log.Printf("Warning: Failed to delete disc image source: %v", dErr)
+						} else {
+							m.appendAILog(job, AILog{
+								Timestamp:  time.Now(),
+								Operation:  "file_deleted",
+								Provider:   "System",
+								Detail:     fmt.Sprintf("Source disc image deleted: %s", cleanPath),
+								DurationMs: 0,
+								Success:    true,
+							})
+						}
+					}
+				}
 			}
 		} else {
 			log.Printf("[Job %s] Path does not require extraction. Proceeding directly.", job.ID)

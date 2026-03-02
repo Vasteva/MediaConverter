@@ -3,9 +3,9 @@ package api
 import (
 	"context"
 	"crypto/rand"
-	"math/big"
 	"fmt"
 	"log"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -372,46 +372,48 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			subtitleAPIKey = security.MaskKey(cfg.SubtitleAPIKey)
 		}
 		return c.JSON(fiber.Map{
-			"sourceDir":        cfg.SourceDir,
-			"destDir":          cfg.DestDir,
-			"gpuVendor":        cfg.GPUVendor,
-			"qualityPreset":    cfg.QualityPreset,
-			"crf":              cfg.CRF,
-			"aiProvider":       cfg.AIProvider,
-			"aiApiKey":         security.MaskKey(cfg.AIApiKey),
-			"aiEndpoint":       cfg.AIEndpoint,
-			"aiModel":          cfg.AIModel,
-			"licenseKey":       security.MaskKey(cfg.LicenseKey),
-			"isPremium":        cfg.IsPremium,
-			"planName":         license.GetPlanName(cfg.LicenseKey),
-			"verifyOutput":     cfg.VerifyOutput,
-			"deleteSource":     cfg.DeleteSource,
+			"sourceDir":           cfg.SourceDir,
+			"destDir":             cfg.DestDir,
+			"gpuVendor":           cfg.GPUVendor,
+			"qualityPreset":       cfg.QualityPreset,
+			"crf":                 cfg.CRF,
+			"aiProvider":          cfg.AIProvider,
+			"aiApiKey":            security.MaskKey(cfg.AIApiKey),
+			"aiEndpoint":          cfg.AIEndpoint,
+			"aiModel":             cfg.AIModel,
+			"licenseKey":          security.MaskKey(cfg.LicenseKey),
+			"isPremium":           cfg.IsPremium,
+			"planName":            license.GetPlanName(cfg.LicenseKey),
+			"verifyOutput":        cfg.VerifyOutput,
+			"deleteSource":        cfg.DeleteSource,
+			"autoConvertISO":      cfg.AutoConvertISO,
 			"subtitleMode":        cfg.SubtitleMode,
 			"subtitleLang":        cfg.SubtitleLang,
 			"subtitleApiKey":      subtitleAPIKey,
 			"subtitleUsername":    cfg.SubtitleUsername,
 			"subtitlePasswordSet": cfg.SubtitlePassword != "",
-			"schedule":         cfg.Schedule,
+			"schedule":            cfg.Schedule,
 		})
 	})
 
 	api.Post("/config", func(c *fiber.Ctx) error {
 		var req struct {
-			QualityPreset    string                      `json:"qualityPreset"`
-			CRF              *int                        `json:"crf"`
-			AIProvider       string                      `json:"aiProvider"`
-			AIApiKey         string                      `json:"aiApiKey"`
-			AIEndpoint       string                      `json:"aiEndpoint"`
-			AIModel          string                      `json:"aiModel"`
-			LicenseKey       string                      `json:"licenseKey"`
-			VerifyOutput     *bool                       `json:"verifyOutput"`
-			DeleteSource     *bool                       `json:"deleteSource"`
-			SubtitleMode     string                      `json:"subtitleMode"`
-			SubtitleLang     string                      `json:"subtitleLang"`
-			SubtitleAPIKey   string                      `json:"subtitleApiKey"`
-			SubtitleUsername string                      `json:"subtitleUsername"`
-			SubtitlePassword string                      `json:"subtitlePassword"`
-			Schedule         *config.ProcessingSchedule  `json:"schedule"`
+			QualityPreset    string                     `json:"qualityPreset"`
+			CRF              *int                       `json:"crf"`
+			AIProvider       string                     `json:"aiProvider"`
+			AIApiKey         string                     `json:"aiApiKey"`
+			AIEndpoint       string                     `json:"aiEndpoint"`
+			AIModel          string                     `json:"aiModel"`
+			LicenseKey       string                     `json:"licenseKey"`
+			VerifyOutput     *bool                      `json:"verifyOutput"`
+			DeleteSource     *bool                      `json:"deleteSource"`
+			AutoConvertISO   *bool                      `json:"autoConvertISO"`
+			SubtitleMode     string                     `json:"subtitleMode"`
+			SubtitleLang     string                     `json:"subtitleLang"`
+			SubtitleAPIKey   string                     `json:"subtitleApiKey"`
+			SubtitleUsername string                     `json:"subtitleUsername"`
+			SubtitlePassword string                     `json:"subtitlePassword"`
+			Schedule         *config.ProcessingSchedule `json:"schedule"`
 		}
 		if err := c.BodyParser(&req); err != nil {
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
@@ -453,6 +455,9 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		}
 		if req.DeleteSource != nil {
 			cfg.DeleteSource = *req.DeleteSource
+		}
+		if req.AutoConvertISO != nil {
+			cfg.AutoConvertISO = *req.AutoConvertISO
 		}
 
 		// Subtitle settings

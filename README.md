@@ -97,7 +97,7 @@ vastiva/
 │   ├── ai/              # AI provider integrations
 │   │   ├── meta/        # Smart metadata cleaning
 │   │   ├── search/      # Natural language search
-│   │   └── whisper/     # Subtitle generation
+│   │   ├── subtitles/       # Subtitle generation (Whisper)
 │   ├── config/          # Configuration management
 │   ├── jobs/            # Job queue and workers
 │   ├── media/           # FFmpeg/MakeMKV wrappers

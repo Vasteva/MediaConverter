@@ -538,7 +538,11 @@ func (s *Scanner) createJobForFile(path string) error {
 
 	// Determine job type based on extension
 	if s.containsExtension(s.config.ExtractExtensions, ext) {
-		jobType = jobs.JobTypeExtract
+		if s.jobManager.GetConfig().AutoConvertISO {
+			jobType = jobs.JobTypeOptimize
+		} else {
+			jobType = jobs.JobTypeExtract
+		}
 	} else if s.containsExtension(s.config.OptimizeExtensions, ext) {
 		jobType = jobs.JobTypeOptimize
 	} else {
@@ -948,7 +952,6 @@ func (s *Scanner) isInDirectory(path, dir string) bool {
 	}
 	return !strings.HasPrefix(rel, "..")
 }
-
 
 // NewProcessedDB creates a new processed file database
 func NewProcessedDB(filePath string) (*ProcessedDB, error) {

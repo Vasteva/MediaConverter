@@ -12,6 +12,11 @@ run:
 test:
 	go test -v ./...
 
+# Run linting
+lint:
+	go fmt ./...
+	go vet ./...
+
 # Clean build artifacts
 clean:
 	rm -f vastiva
