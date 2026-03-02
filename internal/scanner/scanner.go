@@ -584,6 +584,10 @@ func (s *Scanner) createJobForFile(path string) error {
 		return nil
 	}
 
+	// Inherit delete/verify settings from system config so scanner jobs
+	// behave identically to manually-created jobs.
+	sysCfg := s.jobManager.GetConfig()
+
 	// Create job
 	job := &jobs.Job{
 		ID:              util.GenerateID(),
@@ -595,6 +599,8 @@ func (s *Scanner) createJobForFile(path string) error {
 		CreateSubtitles: s.config.AutoCreateSubtitles,
 		Upscale:         s.config.AutoUpscale,
 		Resolution:      s.config.AutoResolution,
+		DeleteSource:    sysCfg.DeleteSource,
+		VerifyOutput:    sysCfg.VerifyOutput,
 		CreatedAt:       time.Now(),
 	}
 
