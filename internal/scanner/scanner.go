@@ -610,8 +610,8 @@ func (s *Scanner) generateOutputPath(inputPath string, jobType jobs.JobType) str
 
 	switch jobType {
 	case jobs.JobTypeExtract:
-		// For extraction, create a subdirectory
-		return filepath.Join(outputDir, nameWithoutExt)
+		// Place the extracted MKV alongside the source file, named after it
+		return filepath.Join(outputDir, nameWithoutExt+".mkv")
 	case jobs.JobTypeOptimize:
 		// For optimization, add suffix
 		return filepath.Join(outputDir, nameWithoutExt+"_optimized.mkv")

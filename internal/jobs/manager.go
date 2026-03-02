@@ -630,17 +630,21 @@ func (m *Manager) runExtraction(job *Job) error {
 		return fmt.Errorf("makemkv wrapper not initialized")
 	}
 
-	log.Printf("[Job %s] Starting disc extraction for %s", job.ID, job.SourcePath)
+	job.mu.RLock()
+	sourcePath := job.SourcePath
+	deleteSource := job.DeleteSource
+	job.mu.RUnlock()
+
+	log.Printf("[Job %s] Starting disc extraction for %s", job.ID, sourcePath)
 
 	// 1. Scan disc to find titles
 	m.updateJob(job, func(j *Job) {
 		j.StatusDetail = "Scanning"
 	})
-	info, err := m.makemkv.ScanDisc(job.ctx, job.SourcePath)
+	info, err := m.makemkv.ScanDisc(job.ctx, sourcePath)
 	if err != nil {
 		return fmt.Errorf("failed to scan disc: %v", err)
 	}
-
 	if len(info.Titles) == 0 {
 		return fmt.Errorf("no titles found on disc")
 	}
@@ -649,31 +653,76 @@ func (m *Manager) runExtraction(job *Job) error {
 	mainTitleIdx := info.FindLargestTitle()
 	log.Printf("[Job %s] Detected main feature: Title %d", job.ID, mainTitleIdx)
 
-	// 3. Ensure destination directory exists
-	if err := os.MkdirAll(job.DestinationPath, 0755); err != nil {
-		return fmt.Errorf("failed to create destination directory: %v", err)
-	}
-
-	// 4. Run extraction
+	// 3. Extract to a temporary directory so we can rename the output cleanly
 	m.updateJob(job, func(j *Job) {
 		j.StatusDetail = "Extracting"
 	})
-	opts := media.ExtractOptions{
-		SourcePath: job.SourcePath,
-		OutputDir:  job.DestinationPath,
-		TitleIndex: mainTitleIdx,
+	tmpDir := filepath.Join(filepath.Dir(sourcePath), ".extract_"+job.ID)
+	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+		return fmt.Errorf("failed to create temp extract dir: %v", err)
 	}
 
+	opts := media.ExtractOptions{
+		SourcePath: sourcePath,
+		OutputDir:  tmpDir,
+		TitleIndex: mainTitleIdx,
+	}
 	err = m.makemkv.ExtractWithProgress(job.ctx, opts, func(p media.TranscodeProgress) {
 		m.updateJob(job, func(j *Job) {
 			j.Progress = p.Percentage
 		})
 	})
 	if err != nil {
+		os.RemoveAll(tmpDir)
 		return fmt.Errorf("extraction failed: %v", err)
 	}
 
-	log.Printf("[Job %s] Extraction complete", job.ID)
+	// 4. Find the extracted MKV in the temp dir
+	mkvFiles, _ := filepath.Glob(filepath.Join(tmpDir, "*.mkv"))
+	if len(mkvFiles) == 0 {
+		os.RemoveAll(tmpDir)
+		return fmt.Errorf("extraction finished but no output file found")
+	}
+
+	// 5. Move it alongside the source ISO, named after the ISO (no subfolder)
+	sourceBase := strings.TrimSuffix(filepath.Base(sourcePath), filepath.Ext(sourcePath))
+	finalPath := filepath.Join(filepath.Dir(sourcePath), sourceBase+".mkv")
+	if err := os.Rename(mkvFiles[0], finalPath); err != nil {
+		os.RemoveAll(tmpDir)
+		return fmt.Errorf("failed to move extracted file: %v", err)
+	}
+	os.RemoveAll(tmpDir)
+
+	// 6. Update job destination to the final file path
+	m.updateJob(job, func(j *Job) {
+		j.DestinationPath = finalPath
+		if fi, statErr := os.Stat(finalPath); statErr == nil {
+			j.OutputSize = fi.Size()
+		}
+	})
+	log.Printf("[Job %s] Extraction complete: %s", job.ID, finalPath)
+
+	// 7. Delete the source ISO if configured and the output is verified non-empty
+	if deleteSource {
+		if fi, statErr := os.Stat(finalPath); statErr == nil && fi.Size() > 0 {
+			log.Printf("[Job %s] Deleting source disc image: %s", job.ID, sourcePath)
+			if delErr := os.Remove(sourcePath); delErr != nil {
+				log.Printf("Warning: Failed to delete source disc image: %v", delErr)
+			} else {
+				m.appendAILog(job, AILog{
+					Timestamp:  time.Now(),
+					Operation:  "file_deleted",
+					Provider:   "System",
+					Detail:     fmt.Sprintf("Source disc image deleted: %s", sourcePath),
+					DurationMs: 0,
+					Success:    true,
+				})
+			}
+		} else {
+			log.Printf("[Job %s] SKIPPING source deletion — output file missing or empty", job.ID)
+		}
+	}
+
 	return nil
 }
 
