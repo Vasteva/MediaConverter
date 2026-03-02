@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
 
+# Cancel any in-progress release build when a newer tag is pushed
+concurrency:
+  group: release
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Build and Release
@@ -19,7 +24,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23' # Matching current project needs
+          go-version: '1.22'
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -33,20 +38,16 @@ jobs:
           npm run build
 
       - name: Build Binaries
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
         run: |
-          # Build for multiple platforms
           mkdir -p dist
-          
+
           # Linux
           GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/vastiva-linux-amd64 ./cmd/server
-          
+
           # macOS
           GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/vastiva-darwin-amd64 ./cmd/server
           GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/vastiva-darwin-arm64 ./cmd/server
-          
+
           # Windows
           GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/vastiva-windows-amd64.exe ./cmd/server
 
