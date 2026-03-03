@@ -247,6 +247,21 @@ function App() {
     }
   }, [authFetch, fetchJobs]);
 
+  // Clear jobs by status
+  const clearFailedJobs = useCallback(async () => {
+    try {
+      const response = await authFetch('/api/jobs?status=failed', { method: 'DELETE' });
+      if (response.ok) {
+        await fetchJobs();
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('Failed to clear failed jobs:', error);
+      return false;
+    }
+  }, [authFetch, fetchJobs]);
+
   // Retry job
   const retryJob = useCallback(async (jobId: string) => {
     try {
@@ -351,6 +366,7 @@ function App() {
             onCreateJob={createJob}
             onCancelJob={cancelJob}
             onRetryJob={retryJob}
+            onClearFailed={clearFailedJobs}
             subtitleMode={config?.subtitleMode}
             sourceDir={config?.sourceDir}
             destDir={config?.destDir}

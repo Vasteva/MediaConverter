@@ -232,6 +232,22 @@ func (m *Manager) AddJob(job *Job) {
 	m.pqCond.Signal()
 }
 
+func (m *Manager) PurgeJobs(status Status) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	count := 0
+	for id, job := range m.jobs {
+		if job.Status == status {
+			delete(m.jobs, id)
+			count++
+		}
+	}
+	if count > 0 {
+		m.Save()
+	}
+	return count
+}
+
 func (m *Manager) GetJob(id string) *Job {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

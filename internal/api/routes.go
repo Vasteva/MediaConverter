@@ -355,6 +355,15 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		return c.JSON(job)
 	})
 
+	api.Delete("/jobs", func(c *fiber.Ctx) error {
+		if jm == nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Job manager not initialized"})
+		}
+		status := c.Query("status", "failed")
+		count := jm.PurgeJobs(jobs.Status(status))
+		return c.JSON(fiber.Map{"cleared": count})
+	})
+
 	api.Delete("/jobs/:id", func(c *fiber.Ctx) error {
 		if jm == nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Job manager not initialized"})

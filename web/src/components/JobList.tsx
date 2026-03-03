@@ -1,4 +1,4 @@
-import { useState, Fragment } from 'react';
+import { useState, useMemo, Fragment } from 'react';
 import FileBrowserModal from './FileBrowserModal';
 import type { Job } from '../types';
 
@@ -7,12 +7,15 @@ interface JobListProps {
     onCreateJob: (job: Partial<Job>) => Promise<boolean>;
     onCancelJob: (jobId: string) => Promise<boolean>;
     onRetryJob: (jobId: string) => Promise<boolean>;
+    onClearFailed?: () => Promise<boolean>;
     subtitleMode?: 'always' | 'selective' | 'never';
     sourceDir?: string;
     destDir?: string;
 }
 
 type FilterType = 'all' | 'active' | 'completed' | 'failed';
+type SortField = 'createdAt' | 'sourcePath' | 'status' | 'progress';
+type SortDir = 'asc' | 'desc';
 
 function formatBytes(bytes: number): string {
     if (bytes === 0) return '0 B';
@@ -22,8 +25,12 @@ function formatBytes(bytes: number): string {
     return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
 }
 
-export default function JobList({ jobs, onCreateJob, onCancelJob, onRetryJob, subtitleMode = 'selective', sourceDir, destDir }: JobListProps) {
+export default function JobList({ jobs, onCreateJob, onCancelJob, onRetryJob, onClearFailed, subtitleMode = 'selective', sourceDir, destDir }: JobListProps) {
     const [filter, setFilter] = useState<FilterType>('all');
+    const [search, setSearch] = useState('');
+    const [sortField, setSortField] = useState<SortField>('createdAt');
+    const [sortDir, setSortDir] = useState<SortDir>('desc');
+    const [isClearing, setIsClearing] = useState(false);
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
 
@@ -44,13 +51,49 @@ export default function JobList({ jobs, onCreateJob, onCancelJob, onRetryJob, su
         setShowFileBrowser(true);
     };
 
-    const filteredJobs = jobs.filter(job => {
-        if (filter === 'all') return true;
-        if (filter === 'active') return ['pending', 'processing'].includes(job.status);
-        if (filter === 'completed') return job.status === 'completed';
-        if (filter === 'failed') return ['failed', 'cancelled'].includes(job.status);
-        return true;
-    });
+    const failedCount = useMemo(() => jobs.filter(j => ['failed', 'cancelled'].includes(j.status)).length, [jobs]);
+
+    const handleClearFailed = async () => {
+        if (!onClearFailed) return;
+        setIsClearing(true);
+        await onClearFailed();
+        setIsClearing(false);
+    };
+
+    const toggleSort = (field: SortField) => {
+        if (sortField === field) {
+            setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+        } else {
+            setSortField(field);
+            setSortDir('desc');
+        }
+    };
+
+    const filteredJobs = useMemo(() => {
+        const q = search.trim().toLowerCase();
+        let result = jobs.filter(job => {
+            if (filter === 'active') return ['pending', 'processing'].includes(job.status);
+            if (filter === 'completed') return job.status === 'completed';
+            if (filter === 'failed') return ['failed', 'cancelled'].includes(job.status);
+            return true;
+        });
+        if (q) {
+            result = result.filter(job =>
+                job.sourcePath.toLowerCase().includes(q) ||
+                job.status.toLowerCase().includes(q) ||
+                job.type.toLowerCase().includes(q)
+            );
+        }
+        result = [...result].sort((a, b) => {
+            let cmp = 0;
+            if (sortField === 'createdAt') cmp = a.createdAt.localeCompare(b.createdAt);
+            else if (sortField === 'sourcePath') cmp = a.sourcePath.localeCompare(b.sourcePath);
+            else if (sortField === 'status') cmp = a.status.localeCompare(b.status);
+            else if (sortField === 'progress') cmp = a.progress - b.progress;
+            return sortDir === 'asc' ? cmp : -cmp;
+        });
+        return result;
+    }, [jobs, filter, search, sortField, sortDir]);
 
     const handleCreateJob = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -95,18 +138,66 @@ export default function JobList({ jobs, onCreateJob, onCancelJob, onRetryJob, su
                 </div>
             </div>
 
-            {/* Filter Tabs */}
-            <div className="flex gap-2 mb-4">
-                {(['all', 'active', 'completed', 'failed'] as FilterType[]).map((f) => (
+            {/* Filter / Search / Sort toolbar */}
+            <div className="flex flex-wrap gap-2 mb-4 items-center">
+                {/* Filter tabs */}
+                <div className="flex gap-1">
+                    {(['all', 'active', 'completed', 'failed'] as FilterType[]).map((f) => (
+                        <button
+                            key={f}
+                            className={`btn btn-sm ${filter === f ? 'btn-primary' : 'btn-secondary'}`}
+                            onClick={() => setFilter(f)}
+                            style={{ textTransform: 'capitalize' }}
+                        >
+                            {f}
+                            {f === 'failed' && failedCount > 0 && (
+                                <span style={{ marginLeft: '4px', background: 'var(--status-failed)', color: '#fff', borderRadius: '10px', padding: '0 5px', fontSize: '0.7rem' }}>
+                                    {failedCount}
+                                </span>
+                            )}
+                        </button>
+                    ))}
+                </div>
+
+                {/* Search */}
+                <input
+                    type="search"
+                    className="input"
+                    placeholder="Search jobs..."
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                    style={{ flex: '1 1 180px', maxWidth: '280px', height: '32px', padding: '0 0.75rem', fontSize: '0.8125rem' }}
+                />
+
+                {/* Sort controls */}
+                <div className="flex gap-1 items-center" style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
+                    <span>Sort:</span>
+                    {([['createdAt', 'Date'], ['sourcePath', 'Name'], ['status', 'Status'], ['progress', 'Progress']] as [SortField, string][]).map(([field, label]) => (
+                        <button
+                            key={field}
+                            className={`btn btn-sm ${sortField === field ? 'btn-primary' : 'btn-secondary'}`}
+                            onClick={() => toggleSort(field)}
+                            style={{ fontSize: '0.75rem' }}
+                        >
+                            {label}
+                            {sortField === field && (
+                                <span style={{ marginLeft: '3px' }}>{sortDir === 'asc' ? '↑' : '↓'}</span>
+                            )}
+                        </button>
+                    ))}
+                </div>
+
+                {/* Clear Failed */}
+                {onClearFailed && failedCount > 0 && (
                     <button
-                        key={f}
-                        className={`btn btn-sm ${filter === f ? 'btn-primary' : 'btn-secondary'}`}
-                        onClick={() => setFilter(f)}
-                        style={{ textTransform: 'capitalize' }}
+                        className="btn btn-sm btn-danger"
+                        onClick={handleClearFailed}
+                        disabled={isClearing}
+                        style={{ marginLeft: 'auto' }}
                     >
-                        {f}
+                        {isClearing ? 'Clearing...' : `Clear Failed (${failedCount})`}
                     </button>
-                ))}
+                )}
             </div>
 
             <div className="card">
