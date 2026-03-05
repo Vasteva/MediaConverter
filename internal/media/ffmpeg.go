@@ -117,8 +117,11 @@ func (f *FFmpegWrapper) buildFFmpegArgs(opts TranscodeOptions) []string {
 	// Subtitle handling (copy all)
 	args = append(args, "-c:s", "copy")
 
-	// Map all streams
-	args = append(args, "-map", "0")
+	// Map video (excluding attached pictures like cover art), audio, and subtitles.
+	// Using capital V excludes streams with the ATTACHED_PIC disposition, which
+	// prevents hardware encoders (VAAPI/NVENC) from attempting to encode PNG/JPEG
+	// cover art streams that they cannot handle.
+	args = append(args, "-map", "0:V", "-map", "0:a", "-map", "0:s")
 
 	// Output file
 	args = append(args, "-y", opts.OutputPath)
@@ -132,10 +135,12 @@ func (f *FFmpegWrapper) getHWAccelInputArgs(vendor GPUVendor) []string {
 	case GPUVendorNvidia:
 		return []string{"-hwaccel", "cuda", "-hwaccel_output_format", "cuda"}
 	case GPUVendorIntel:
-		// Use VAAPI for Intel on Linux/Docker as it's more reliable than QSV in containers
-		return []string{"-hwaccel", "vaapi", "-hwaccel_device", "/dev/dri/renderD128", "-hwaccel_output_format", "vaapi"}
+		// Use VAAPI for Intel on Linux/Docker as it's more reliable than QSV in containers.
+		// allow_profile_mismatch lets FFmpeg fall back to software decoding for source codecs
+		// (e.g. XviD/mpeg4 ASP) that VAAPI cannot decode, instead of aborting.
+		return []string{"-hwaccel", "vaapi", "-hwaccel_device", "/dev/dri/renderD128", "-hwaccel_output_format", "vaapi", "-hwaccel_flags", "allow_profile_mismatch"}
 	case GPUVendorAMD:
-		return []string{"-hwaccel", "vaapi", "-hwaccel_device", "/dev/dri/renderD128", "-hwaccel_output_format", "vaapi"}
+		return []string{"-hwaccel", "vaapi", "-hwaccel_device", "/dev/dri/renderD128", "-hwaccel_output_format", "vaapi", "-hwaccel_flags", "allow_profile_mismatch"}
 	default:
 		return []string{}
 	}

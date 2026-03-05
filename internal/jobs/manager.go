@@ -847,6 +847,10 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 	deleteSource := job.DeleteSource
 	job.mu.RUnlock()
 
+	if sourcePath == destPath {
+		return fmt.Errorf("source and destination paths are identical (%s): FFmpeg cannot encode a file in-place", sourcePath)
+	}
+
 	opts := media.TranscodeOptions{
 		InputPath:     sourcePath,
 		OutputPath:    destPath,

@@ -391,6 +391,11 @@ func (s *Scanner) ScanAll() error {
 	for _, watchDir := range s.config.WatchDirectories {
 		files, err := s.scanDirectory(watchDir)
 		if err != nil {
+			// If the scanner was stopped mid-walk, exit cleanly without an error.
+			if s.ctx.Err() != nil {
+				log.Printf("[Scanner] Scan interrupted by stop signal")
+				return nil
+			}
 			allErrors = append(allErrors, err)
 			continue
 		}
@@ -441,12 +446,24 @@ func (s *Scanner) scanDirectory(watchDir WatchDirectory) ([]string, error) {
 	}
 
 	walkFunc := func(path string, info os.FileInfo, err error) error {
+		// Abort the walk if the scanner has been stopped.
+		select {
+		case <-s.ctx.Done():
+			return fmt.Errorf("scanner stopped")
+		default:
+		}
+
 		if err != nil {
 			return err
 		}
 
 		// Handle directories
 		if info.IsDir() {
+			// Skip MakeMKV extraction temp directories — files inside are still
+			// being written and will be moved to their final location on completion.
+			if strings.HasPrefix(info.Name(), ".extract_") {
+				return filepath.SkipDir
+			}
 			// If not recursive and not the root directory, skip
 			if !watchDir.Recursive && path != watchDir.Path {
 				return filepath.SkipDir
