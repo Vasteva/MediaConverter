@@ -134,12 +134,10 @@ func (f *FFmpegWrapper) getHWAccelInputArgs(vendor GPUVendor) []string {
 	switch vendor {
 	case GPUVendorNvidia:
 		return []string{"-hwaccel", "cuda", "-hwaccel_output_format", "cuda"}
-	case GPUVendorIntel:
-		// Use VAAPI for Intel on Linux/Docker as it's more reliable than QSV in containers.
+	case GPUVendorIntel, GPUVendorAMD:
+		// Use VAAPI for Intel/AMD on Linux/Docker as it's more reliable than QSV in containers.
 		// allow_profile_mismatch lets FFmpeg fall back to software decoding for source codecs
 		// (e.g. XviD/mpeg4 ASP) that VAAPI cannot decode, instead of aborting.
-		return []string{"-hwaccel", "vaapi", "-hwaccel_device", "/dev/dri/renderD128", "-hwaccel_output_format", "vaapi", "-hwaccel_flags", "allow_profile_mismatch"}
-	case GPUVendorAMD:
 		return []string{"-hwaccel", "vaapi", "-hwaccel_device", "/dev/dri/renderD128", "-hwaccel_output_format", "vaapi", "-hwaccel_flags", "allow_profile_mismatch"}
 	default:
 		return []string{}

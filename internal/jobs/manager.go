@@ -464,7 +464,7 @@ func (m *Manager) processJob(job *Job) {
 			log.Printf("[Job %s] Identified main feature: Title %d (Total titles: %d)", job.ID, mainTitleIdx, len(info.Titles))
 
 			// Auto-extract first
-			extractDir := filepath.Join(filepath.Dir(job.DestinationPath), "extract_"+job.ID)
+			extractDir := filepath.Join(filepath.Dir(job.DestinationPath), ".extract_"+job.ID)
 			if err = os.MkdirAll(extractDir, 0755); err != nil {
 				err = fmt.Errorf("failed to create extract dir: %v", err)
 				break
