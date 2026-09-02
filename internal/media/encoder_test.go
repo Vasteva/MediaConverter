@@ -177,3 +177,56 @@ func TestBitDepthFromPixFmt(t *testing.T) {
 		}
 	}
 }
+
+// TestEncodingSummary uses the real Ant-Man 2160p REMUX values. The AI encoding
+// analysis previously received RawJSON — the entire "-show_streams -show_format"
+// output, which for this 48-stream source runs to tens of kilobytes and buries
+// the handful of facts the decision turns on.
+func TestEncodingSummary(t *testing.T) {
+	info := &MediaInfo{
+		CodecName:       "hevc",
+		VideoWidth:      3840,
+		VideoHeight:     2160,
+		BitDepth:        10,
+		PixFmt:          "yuv420p10le",
+		ColorTransfer:   "smpte2084",
+		Duration:        7205,
+		Size:            50852853982,
+		VideoStreams:    1,
+		AudioStreams:    3,
+		SubtitleStreams: 45,
+	}
+
+	got := info.EncodingSummary()
+
+	for _, want := range []string{
+		"hevc 3840x2160",
+		"10-bit",
+		"yuv420p10le",
+		"HDR transfer smpte2084",
+		"47.36 GB",
+		"Average bitrate: 56.5 Mbps",
+		"1 video, 3 audio, 45 subtitle",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("summary missing %q\ngot:\n%s", want, got)
+		}
+	}
+
+	// The point of the summary is that it is small.
+	if len(got) > 400 {
+		t.Errorf("summary is %d bytes, expected it to stay compact:\n%s", len(got), got)
+	}
+}
+
+func TestEncodingSummaryHandlesSparseProbe(t *testing.T) {
+	// ffprobe can fail to report most fields on a damaged or exotic file; the
+	// summary must not panic or emit obvious nonsense.
+	got := (&MediaInfo{}).EncodingSummary()
+	if !strings.Contains(got, "unknown") {
+		t.Errorf("expected an unknown codec to be labelled, got:\n%s", got)
+	}
+	if strings.Contains(got, "Average bitrate") {
+		t.Errorf("bitrate must be omitted when duration is unknown, got:\n%s", got)
+	}
+}

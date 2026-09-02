@@ -352,6 +352,7 @@ func (f *FFmpegWrapper) GetMediaInfo(ctx context.Context, path string) (*MediaIn
 		} `json:"format"`
 		Streams []struct {
 			CodecType        string `json:"codec_type"`
+			CodecName        string `json:"codec_name"`
 			Width            int    `json:"width"`
 			Height           int    `json:"height"`
 			PixFmt           string `json:"pix_fmt"`
@@ -397,6 +398,7 @@ func (f *FFmpegWrapper) GetMediaInfo(ctx context.Context, path string) (*MediaIn
 				primaryVideoFound = true
 				info.VideoWidth = s.Width
 				info.VideoHeight = s.Height
+				info.CodecName = s.CodecName
 				info.PixFmt = s.PixFmt
 				info.ColorPrimaries = s.ColorPrimaries
 				info.ColorTransfer = s.ColorTransfer
@@ -444,8 +446,9 @@ type MediaInfo struct {
 	// 10-bit source with an 8-bit encoder profile fails at encoder init, after
 	// the output file has already been created — which is how a 0-byte output
 	// gets left behind.
-	PixFmt   string // e.g. "yuv420p", "yuv420p10le"
-	BitDepth int    // 8, 10 or 12; 0 when unknown
+	CodecName string // e.g. "hevc", "h264"
+	PixFmt    string // e.g. "yuv420p", "yuv420p10le"
+	BitDepth  int    // 8, 10 or 12; 0 when unknown
 
 	// Colour signalling, copied to the output so HDR content doesn't lose its
 	// metadata and render washed out.
@@ -460,6 +463,55 @@ type MediaInfo struct {
 	VideoStreams    int
 	AudioStreams    int
 	SubtitleStreams int
+}
+
+// EncodingSummary renders the properties that matter when choosing an encoder
+// setting, as a few lines of plain text.
+//
+// This exists because the AI encoding analysis previously received RawJSON —
+// the complete "-show_streams -show_format" output. For a UHD REMUX with 48
+// streams that is tens of kilobytes of mostly irrelevant detail, which buries
+// the handful of facts that actually inform the decision and, on a small local
+// model, reliably produces unusable answers.
+//
+// Average bitrate is included because it is the single strongest signal for how
+// much headroom a re-encode has, and it is not directly present in the probe.
+func (m *MediaInfo) EncodingSummary() string {
+	var b strings.Builder
+
+	codec := m.CodecName
+	if codec == "" {
+		codec = "unknown"
+	}
+	fmt.Fprintf(&b, "Video: %s %dx%d", codec, m.VideoWidth, m.VideoHeight)
+	if m.BitDepth > 0 {
+		fmt.Fprintf(&b, ", %d-bit", m.BitDepth)
+	}
+	if m.PixFmt != "" {
+		fmt.Fprintf(&b, " (%s)", m.PixFmt)
+	}
+	if m.IsHDR() {
+		fmt.Fprintf(&b, ", HDR transfer %s", m.ColorTransfer)
+	}
+	if m.IsDolbyVision() {
+		fmt.Fprintf(&b, ", Dolby Vision profile %d", m.DVProfile)
+	}
+	b.WriteString("\n")
+
+	if m.Duration > 0 {
+		fmt.Fprintf(&b, "Duration: %.0f seconds\n", m.Duration)
+	}
+	if m.Size > 0 {
+		fmt.Fprintf(&b, "Size: %.2f GB\n", float64(m.Size)/(1<<30))
+		if m.Duration > 0 {
+			mbps := (float64(m.Size) * 8) / m.Duration / 1e6
+			fmt.Fprintf(&b, "Average bitrate: %.1f Mbps\n", mbps)
+		}
+	}
+	fmt.Fprintf(&b, "Streams: %d video, %d audio, %d subtitle",
+		m.VideoStreams, m.AudioStreams, m.SubtitleStreams)
+
+	return b.String()
 }
 
 // IsHDR reports whether the source uses a HDR transfer function.

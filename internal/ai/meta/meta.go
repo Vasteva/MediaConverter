@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -132,37 +133,76 @@ func truncateForError(s string) string {
 	return s
 }
 
-// AnalyzeEncoding uses AI to recommend optimal encoding settings based on media info
-func (c *Cleaner) AnalyzeEncoding(ctx context.Context, rawJSON string) (int, error) {
+// CRF bounds for an AI suggestion. Wider than the 18–28 the prompt asks for, so
+// a defensible answer outside that band is still accepted, but narrow enough to
+// reject a value that would produce something unwatchable or enormous.
+const (
+	MinSuggestedCRF = 14
+	MaxSuggestedCRF = 34
+)
+
+// AnalyzeEncoding asks the AI provider to recommend a CRF for the given source.
+//
+// summary should be a short description of the source — see
+// media.MediaInfo.EncodingSummary. Passing raw ffprobe JSON here was the
+// previous behaviour and is counterproductive: a UHD REMUX probe runs to tens
+// of kilobytes, and burying four relevant facts in it makes a small local model
+// markedly worse at the task.
+//
+// Returns 0 and an error when no usable value could be obtained; the caller is
+// expected to fall back to its configured default.
+func (c *Cleaner) AnalyzeEncoding(ctx context.Context, summary string) (int, error) {
 	if c.provider == nil {
-		return 23, fmt.Errorf("AI provider not configured")
+		return 0, fmt.Errorf("AI provider not configured")
 	}
 
-	prompt := fmt.Sprintf(`
-		Analyze this ffprobe JSON output and recommend the optimal CRF (Constant Rate Factor) 
-		for H.265 encoding to balance high quality and small file size.
-		
-		Media Info: %s
-		
-		Return ONLY the recommended CRF as an integer (typically between 18 and 28).
-		Example Output: 22
-	`, rawJSON)
+	prompt := fmt.Sprintf(`Recommend a CRF (Constant Rate Factor) for re-encoding this video to H.265, balancing visual quality against file size.
+
+%s
+
+Guidance: lower CRF means higher quality and a larger file. Grainy or highly detailed sources need a lower CRF to avoid smearing; clean digital sources tolerate a higher one. Typical values run from 18 to 28.
+
+Respond with a single integer and nothing else. No explanation, no units, no punctuation.
+
+Example response: 22`, summary)
 
 	response, err := c.provider.Analyze(ctx, prompt)
 	if err != nil {
-		return 23, err
+		return 0, err
 	}
 
-	// Parse the response for the integer
-	var crf int
-	_, err = fmt.Sscanf(strings.TrimSpace(response), "%d", &crf)
+	crf, err := ExtractCRF(response)
 	if err != nil {
-		return 23, fmt.Errorf("failed to parse AI response: %v", err)
+		return 0, err
+	}
+	return crf, nil
+}
+
+// firstInteger matches the first run of digits anywhere in a string, optionally
+// preceded by a minus sign so a negative answer is detected and rejected rather
+// than silently read as positive.
+var firstInteger = regexp.MustCompile(`-?\d+`)
+
+// ExtractCRF pulls a CRF value out of a model response.
+//
+// The previous implementation used fmt.Sscanf(response, "%d", &crf), which
+// requires the response to *begin* with digits. Instruction-following is the
+// first thing to degrade on small local models, so "I'd suggest CRF 22" — a
+// perfectly good answer — failed outright and was logged as an error.
+func ExtractCRF(response string) (int, error) {
+	match := firstInteger.FindString(strings.TrimSpace(response))
+	if match == "" {
+		return 0, fmt.Errorf("no number in response %q", truncateForError(response))
 	}
 
-	if crf < 10 || crf > 51 {
-		return 23, fmt.Errorf("AI returned invalid CRF: %d", crf)
+	crf, err := strconv.Atoi(match)
+	if err != nil {
+		return 0, fmt.Errorf("unparseable number %q in response: %w", match, err)
 	}
 
+	if crf < MinSuggestedCRF || crf > MaxSuggestedCRF {
+		return 0, fmt.Errorf("suggested CRF %d is outside the accepted range %d–%d",
+			crf, MinSuggestedCRF, MaxSuggestedCRF)
+	}
 	return crf, nil
 }

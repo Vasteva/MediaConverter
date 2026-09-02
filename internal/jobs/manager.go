@@ -866,8 +866,11 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 		cleaner := meta.NewCleaner(m.ai)
 		log.Printf("[Premium] AI analyzing media for optimal encoding settings...")
 		t0Enc := time.Now()
-		if suggestedCRF, err := cleaner.AnalyzeEncoding(job.ctx, info.RawJSON); err == nil {
-			log.Printf("[Premium] AI suggested CRF: %d (System Default: %d)", suggestedCRF, crf)
+		// Pass a short summary rather than the full ffprobe dump: for a UHD
+		// REMUX with 48 streams the raw JSON is tens of kilobytes that bury the
+		// few facts the decision actually turns on.
+		if suggestedCRF, err := cleaner.AnalyzeEncoding(job.ctx, info.EncodingSummary()); err == nil {
+			log.Printf("[Job %s] AI suggested CRF %d (system default %d)", job.ID, suggestedCRF, crf)
 			defaultCRF := crf
 			crf = suggestedCRF
 			m.appendAILog(job, AILog{
@@ -879,14 +882,18 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 				Success:    true,
 			})
 		} else {
-			log.Printf("[Premium] AI analysis failed: %v", err)
+			// Not an error condition: the configured CRF is a perfectly good
+			// answer, and this path is taken whenever the model declines to
+			// produce a usable number. Logged at info level so it stops looking
+			// like a fault in the logs.
+			log.Printf("[Job %s] No AI CRF suggestion, using configured CRF %d (%v)", job.ID, crf, err)
 			m.appendAILog(job, AILog{
 				Timestamp:  t0Enc,
 				Operation:  "encoding_analysis",
 				Provider:   m.ai.GetName(),
-				Detail:     fmt.Sprintf("Analysis failed, using CRF %d", crf),
+				Detail:     fmt.Sprintf("No suggestion available — using configured CRF %d", crf),
 				DurationMs: time.Since(t0Enc).Milliseconds(),
-				Success:    false,
+				Success:    true,
 				Error:      err.Error(),
 			})
 		}

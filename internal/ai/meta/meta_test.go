@@ -116,3 +116,66 @@ func TestExtractTitleCapsLength(t *testing.T) {
 		t.Errorf("title is %d runes, expected it to be capped", len([]rune(got)))
 	}
 }
+
+// TestExtractCRFFromModelResponses covers the responses a small local model
+// actually produces. The previous parser used fmt.Sscanf(response, "%d", &crf),
+// which requires the response to *begin* with digits — so every conversational
+// answer here failed outright and was logged as an error, even though the
+// fallback to the configured CRF worked correctly.
+func TestExtractCRFFromModelResponses(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want int
+	}{
+		{"bare integer", "22", 22},
+		{"trailing newline", "22\n", 22},
+		{"leading prose", "I'd suggest CRF 22", 22},
+		{"full sentence", "Based on the bitrate, I recommend a CRF of 20 for this source.", 20},
+		{"labelled", "CRF: 24", 24},
+		{"markdown emphasis", "**23**", 23},
+		{"code fence", "```\n21\n```", 21},
+		{"trailing explanation", "19\n\nThis is a grainy film source.", 19},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ExtractCRF(tc.raw)
+			if err != nil {
+				t.Fatalf("ExtractCRF(%q): %v", tc.raw, err)
+			}
+			if got != tc.want {
+				t.Errorf("ExtractCRF(%q) = %d, want %d", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestExtractCRFRejectsUnusableValues(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{"no digits", "I cannot determine an appropriate value."},
+		{"empty", ""},
+		{"too low", "2"},
+		{"too high", "51"},
+		{"negative", "-5"},
+		{"zero", "0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got, err := ExtractCRF(tc.raw); err == nil {
+				t.Errorf("expected rejection of %q, got CRF %d", tc.raw, got)
+			}
+		})
+	}
+}
+
+// A rejected suggestion must return 0, not a plausible-looking default. The
+// previous signature returned 23 alongside the error, which invites a caller to
+// use a value that no model produced.
+func TestExtractCRFReturnsZeroOnFailure(t *testing.T) {
+	if got, _ := ExtractCRF("no number here"); got != 0 {
+		t.Errorf("failed parse returned %d, want 0 so the caller uses its own default", got)
+	}
+}
