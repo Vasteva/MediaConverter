@@ -1,6 +1,8 @@
 package scanner
 
 import (
+	"context"
+	"github.com/Vasteva/MediaConverter/internal/jobs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -98,5 +100,50 @@ func TestCalculateHash(t *testing.T) {
 	hash2, _ := calculateFileHash(tmpFile)
 	if hash != hash2 {
 		t.Error("expected consistent hash")
+	}
+}
+
+// TestScanSkipsHiddenDirectories covers the holding directory used by
+// replace-in-place. It sits inside the media root and holds the originals of
+// already-converted titles, so a scan that descended into it would queue every
+// replaced original for conversion again — undoing the work and refilling the
+// disk. The same rule covers MakeMKV's .extract_ temp directories.
+func TestScanSkipsHiddenDirectories(t *testing.T) {
+	root := t.TempDir()
+
+	mustWrite := func(rel string) string {
+		p := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		return p
+	}
+
+	wanted := mustWrite("movies/Aliens (1986)/aliens.mkv")
+	mustWrite(".vastiva-replaced/movies/Aliens (1986)/aliens.mkv") // held original
+	mustWrite(".extract_job1/title.mkv")                           // in-progress extraction
+	mustWrite("movies/Alpha (2018)/" + jobs.TempFilePrefix + "j2.mkv")
+
+	// scanDirectory selects on s.ctx, so it must be set.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := &Scanner{
+		ctx: ctx,
+		config: &ScannerConfig{
+			OptimizeExtensions: []string{".mkv"},
+			ExtractExtensions:  []string{".iso"},
+		},
+	}
+
+	found, err := s.scanDirectory(WatchDirectory{Path: root, Recursive: true})
+	if err != nil {
+		t.Fatalf("scanDirectory: %v", err)
+	}
+
+	if len(found) != 1 || found[0] != wanted {
+		t.Errorf("expected only %q, got %v", wanted, found)
 	}
 }

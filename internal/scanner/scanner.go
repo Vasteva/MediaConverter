@@ -473,9 +473,16 @@ func (s *Scanner) scanDirectory(watchDir WatchDirectory) ([]string, error) {
 
 		// Handle directories
 		if info.IsDir() {
-			// Skip MakeMKV extraction temp directories — files inside are still
-			// being written and will be moved to their final location on completion.
-			if strings.HasPrefix(info.Name(), ".extract_") {
+			// Skip hidden directories. This covers MakeMKV extraction temp dirs
+			// (.extract_*), whose contents are still being written, and the
+			// holding directory used by replace-in-place — which sits inside the
+			// media root and holds the originals of already-converted titles. A
+			// scan that descended into it would queue every replaced original for
+			// conversion again, undoing the work and filling the disk.
+			//
+			// The root itself is never skipped, so a watch directory that happens
+			// to be hidden still works.
+			if path != watchDir.Path && strings.HasPrefix(info.Name(), ".") {
 				return filepath.SkipDir
 			}
 			// If not recursive and not the root directory, skip
