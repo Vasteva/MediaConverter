@@ -797,14 +797,36 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 
 	log.Printf("[Job %s] Starting optimization: %s", job.ID, sourcePath)
 
-	// 1. Get media info for duration
+	// 1. Probe the source. Everything downstream — encoder profile, colour
+	// signalling, and the output validation gate — is derived from this.
 	info, err := m.ffmpeg.GetMediaInfo(job.ctx, sourcePath)
 	if err != nil {
 		log.Printf("[Job %s] Error getting media info: %v", job.ID, err)
 		return fmt.Errorf("failed to get media info: %w", err)
 	}
 
-	log.Printf("[Job %s] Media duration: %.2f seconds", job.ID, info.Duration)
+	log.Printf("[Job %s] Source: %.2fs, %dx%d, %s (%d-bit), transfer=%q, DV profile=%d",
+		job.ID, info.Duration, info.VideoWidth, info.VideoHeight,
+		info.PixFmt, info.BitDepth, info.ColorTransfer, info.DVProfile)
+
+	// Reject inputs this pipeline cannot encode correctly, rather than emitting
+	// a broken file that looks like a success.
+	if err := media.CheckSourceSupported(info); err != nil {
+		log.Printf("[Job %s] %v", job.ID, err)
+		m.appendAILog(job, AILog{
+			Timestamp: time.Now(),
+			Operation: "source_rejected",
+			Provider:  "System",
+			Detail:    err.Error(),
+			Success:   false,
+			Error:     err.Error(),
+		})
+		return err
+	}
+	if info.IsDolbyVision() {
+		log.Printf("[Job %s] Note: Dolby Vision profile %d — encoding the HDR10 base layer; "+
+			"Dolby Vision metadata will not survive the re-encode", job.ID, info.DVProfile)
+	}
 
 	// 2. Premium Feature: AI Adaptive Encoding
 	crf := m.config.CRF
@@ -852,15 +874,16 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 	}
 
 	opts := media.TranscodeOptions{
-		InputPath:     sourcePath,
-		OutputPath:    destPath,
-		GPUVendor:     media.GPUVendor(m.config.GPUVendor),
-		Preset:        media.QualityPreset(m.config.QualityPreset),
-		CRF:           crf,
-		TotalDuration: info.Duration,
-		Upscale:       upscale,
-		Resolution:    resolution,
+		InputPath:  sourcePath,
+		OutputPath: destPath,
+		GPUVendor:  media.GPUVendor(m.config.GPUVendor),
+		Preset:     media.QualityPreset(m.config.QualityPreset),
+		CRF:        crf,
+		Upscale:    upscale,
+		Resolution: resolution,
 	}
+	// Carries duration, bit depth, and colour signalling from the probe.
+	opts.ApplySourceInfo(info)
 
 	log.Printf("[Job %s] Starting ffmpeg transcoding to: %s", job.ID, opts.OutputPath)
 	t0Trans := time.Now()
@@ -882,8 +905,38 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 	})
 	if err != nil {
 		log.Printf("[Job %s] FFmpeg failed: %v", job.ID, err)
+		m.discardOutput(job, destPath, "transcode failed")
 		return err
 	}
+
+	// Validate before believing the exit code. A transcode can stop early and
+	// leave a well-formed but truncated file, which exits zero and passes an
+	// existence check. Nothing downstream — success status, source deletion —
+	// may happen until this passes.
+	m.updateJob(job, func(j *Job) { j.StatusDetail = "Validating" })
+	t0Val := time.Now()
+	if valErr := m.ffmpeg.ValidateOutput(job.ctx, info, destPath); valErr != nil {
+		log.Printf("[Job %s] Output rejected: %v", job.ID, valErr)
+		m.appendAILog(job, AILog{
+			Timestamp:  t0Val,
+			Operation:  "output_validation",
+			Provider:   "System",
+			Detail:     "Output rejected — see error",
+			DurationMs: time.Since(t0Val).Milliseconds(),
+			Success:    false,
+			Error:      valErr.Error(),
+		})
+		m.discardOutput(job, destPath, "failed validation")
+		return valErr
+	}
+	m.appendAILog(job, AILog{
+		Timestamp:  t0Val,
+		Operation:  "output_validation",
+		Provider:   "System",
+		Detail:     "Output validated: duration, streams and size within tolerance",
+		DurationMs: time.Since(t0Val).Milliseconds(),
+		Success:    true,
+	})
 
 	log.Printf("[Job %s] Transcoding completed successfully", job.ID)
 	m.appendAILog(job, AILog{
@@ -958,24 +1011,24 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 
 		t0Ver := time.Now()
 		if vOk, vErr := m.runVerificationFromPaths(job, sourcePath, destPath); vErr != nil {
-			log.Printf("Warning: AI Verification failed to execute: %v", vErr)
-			m.updateJob(job, func(j *Job) {
-				j.Error = fmt.Sprintf("Verification error: %v", vErr)
-			})
+			// The check could not be run. Treat that as inconclusive rather than
+			// as a pass: the deterministic gate above already cleared the output,
+			// so keep it and complete the job, but leave Verified false so the
+			// source is not deleted.
+			log.Printf("[Job %s] Warning: AI verification could not run: %v", job.ID, vErr)
 			m.appendAILog(job, AILog{
 				Timestamp:  t0Ver,
 				Operation:  "verification",
 				Provider:   m.ai.GetName(),
-				Detail:     "Verification failed to execute",
+				Detail:     "Verification could not run — output kept, source retained",
 				DurationMs: time.Since(t0Ver).Milliseconds(),
 				Success:    false,
 				Error:      vErr.Error(),
 			})
 		} else if !vOk {
-			log.Printf("[Premium] FAILURE: AI detected corruption in output video.")
-			m.updateJob(job, func(j *Job) {
-				j.Error = "AI Verification Failed: Corruption detected"
-			})
+			// The model looked at the output and judged it broken. That is a
+			// failed job, not a successful one with a note attached.
+			log.Printf("[Job %s] FAILURE: AI detected corruption in output video.", job.ID)
 			m.appendAILog(job, AILog{
 				Timestamp:  t0Ver,
 				Operation:  "verification",
@@ -984,7 +1037,8 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 				DurationMs: time.Since(t0Ver).Milliseconds(),
 				Success:    false,
 			})
-			// We do NOT set verified=true
+			m.discardOutput(job, destPath, "failed AI verification")
+			return fmt.Errorf("AI verification failed: corruption detected in output")
 		} else {
 			log.Printf("[Premium] SUCCESS: Video integrity verified by AI.")
 			verified = true
@@ -1001,14 +1055,13 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 			})
 		}
 	} else {
-		// AI verification not available (not premium, no AI, or verifyOutput disabled).
-		// Still require the output file to exist and be non-empty before allowing
-		// source deletion, to guard against silent failures.
-		if info, statErr := os.Stat(destPath); statErr == nil && info.Size() > 0 {
-			verified = true
-		} else {
-			log.Printf("[Job %s] WARNING: deleteSource requested but output file is missing or empty: %s", job.ID, destPath)
-		}
+		// AI verification not available (not premium, no AI, or verifyOutput
+		// disabled). The deterministic gate above has already confirmed the
+		// output is a complete, probeable transcode of the source — duration,
+		// streams and size all within tolerance — which is a far stronger
+		// guarantee than the size>0 check this replaced. That check accepted a
+		// 2.7 MB stub of a 60 GB source as grounds for deleting the original.
+		verified = true
 	}
 
 	// 5. Delete Source (Safe Delete)
@@ -1037,6 +1090,40 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 
 func (m *Manager) runOptimization(job *Job) error {
 	return m.runOptimizationFromPath(job, job.SourcePath)
+}
+
+// discardOutput removes a rejected transcode output so a broken file is never
+// left sitting at the destination looking like a successful conversion.
+//
+// FFmpeg creates the output file before it starts encoding, so an encoder that
+// fails at initialisation leaves a 0-byte file behind, and one that dies partway
+// leaves a truncated one. Neither is distinguishable from a good result by
+// looking at the directory.
+func (m *Manager) discardOutput(job *Job, destPath, reason string) {
+	if destPath == "" {
+		return
+	}
+	fi, err := os.Stat(destPath)
+	if err != nil {
+		return // nothing was written
+	}
+	if fi.IsDir() {
+		log.Printf("[Job %s] Refusing to discard %s: it is a directory", job.ID, destPath)
+		return
+	}
+	if err := os.Remove(destPath); err != nil {
+		log.Printf("[Job %s] Warning: could not remove rejected output %s: %v", job.ID, destPath, err)
+		return
+	}
+	log.Printf("[Job %s] Removed rejected output (%s, %d bytes): %s",
+		job.ID, reason, fi.Size(), destPath)
+	m.appendAILog(job, AILog{
+		Timestamp: time.Now(),
+		Operation: "output_discarded",
+		Provider:  "System",
+		Detail:    fmt.Sprintf("Removed %d-byte output — %s", fi.Size(), reason),
+		Success:   true,
+	})
 }
 
 func (m *Manager) runVerificationFromPaths(job *Job, srcPath, destPath string) (bool, error) {
