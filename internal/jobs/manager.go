@@ -85,6 +85,28 @@ type Job struct {
 	cmd    *exec.Cmd
 }
 
+// MarshalJSON serialises a Job while holding its read lock.
+//
+// Worker goroutines mutate Progress, FPS, ETA, Status and StatusDetail
+// continuously during a transcode — the FFmpeg progress callback fires several
+// times a second. Meanwhile three separate call sites serialise jobs from other
+// goroutines: Manager.Save, the /api/jobs handler via GetAllJobs, and the SSE
+// broadcaster on every update. None of them took job.mu, which the race
+// detector reports on any run that processes a job.
+//
+// Locking at the marshal boundary fixes all three at once, and any call site
+// added later, without changing a single signature.
+func (j *Job) MarshalJSON() ([]byte, error) {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+
+	// The local type sheds this method, so the nested Marshal does not recurse.
+	// Converting the pointer avoids copying the struct — and its mutex — which
+	// go vet's copylocks check would reject.
+	type jobFields Job
+	return json.Marshal((*jobFields)(j))
+}
+
 // priorityQueue implements heap.Interface for *Job.
 // Higher Priority value = dequeued first. Equal-priority jobs are ordered FIFO by CreatedAt.
 type priorityQueue []*Job
@@ -235,14 +257,17 @@ func (m *Manager) AddJob(job *Job) {
 
 func (m *Manager) PurgeJobs(status Status) int {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	count := 0
 	for id, job := range m.jobs {
-		if job.Status == status {
+		if job.GetStatus() == status {
 			delete(m.jobs, id)
 			count++
 		}
 	}
+	m.mu.Unlock()
+
+	// Save takes m.mu itself, so it must not be called while the write lock is
+	// held. See the note on Save.
 	if count > 0 {
 		m.Save()
 	}
@@ -278,20 +303,40 @@ func (m *Manager) GetVideoResolution(ctx context.Context, path string) (width, h
 }
 
 func (m *Manager) CancelJob(id string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if job, ok := m.jobs[id]; ok {
-		if job.cancel != nil {
-			job.cancel()
-		}
-		job.Status = StatusCancelled
-		m.Save()
-		if m.OnJobUpdate != nil {
-			m.OnJobUpdate(job)
-		}
-		return true
+	m.mu.RLock()
+	job, ok := m.jobs[id]
+	m.mu.RUnlock()
+	if !ok {
+		return false
 	}
-	return false
+
+	// cancel and Status are both guarded by job.mu — cancel is assigned in
+	// processJob under that lock, and Status is written by the worker on every
+	// state change.
+	job.mu.Lock()
+	if job.cancel != nil {
+		job.cancel()
+	}
+	job.Status = StatusCancelled
+	job.mu.Unlock()
+
+	// Save takes m.mu itself, so it must not be called while a manager lock is
+	// held. See the note on Save.
+	m.Save()
+	if m.OnJobUpdate != nil {
+		m.OnJobUpdate(job)
+	}
+	return true
+}
+
+// GetStatus returns the job's current status under its lock.
+//
+// Status is written by the worker goroutine throughout a transcode, so reading
+// the field directly from any other goroutine is a data race.
+func (j *Job) GetStatus() Status {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return j.Status
 }
 
 // RetryJob resets a job and adds it back to the priority queue
@@ -1262,7 +1307,13 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
 }
 
-// Save persists all jobs to disk
+// Save persists all jobs to disk.
+//
+// Takes m.mu itself, so callers must not hold any manager lock when calling it.
+// RWMutex is not reentrant: CancelJob and PurgeJobs previously called Save
+// while holding m.mu.Lock(), which deadlocked the goroutine against a lock it
+// already held and left the mutex permanently locked — wedging every later
+// GetAllJobs, AddJob and Save behind it. Both are wired to UI buttons.
 func (m *Manager) Save() error {
 	if m.jobsFilePath == "" {
 		return nil // No persistence configured
@@ -1331,7 +1382,7 @@ func (m *Manager) RequeuePendingJobs() {
 	m.mu.RLock()
 	pending := make([]*Job, 0)
 	for _, job := range m.jobs {
-		if job.Status == StatusPending {
+		if job.GetStatus() == StatusPending {
 			pending = append(pending, job)
 		}
 	}
