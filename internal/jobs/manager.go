@@ -4,6 +4,7 @@ import (
 	"container/heap"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -904,7 +905,24 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 		})
 	})
 	if err != nil {
-		log.Printf("[Job %s] FFmpeg failed: %v", job.ID, err)
+		var integrityErr *media.TranscodeIntegrityError
+		if errors.As(err, &integrityErr) {
+			// FFmpeg exited 0 but dropped frames. Report it as its own failure
+			// mode — it is not a crash, and calling it one hides the cause.
+			log.Printf("[Job %s] Decode errors during transcode, output discarded: %v",
+				job.ID, integrityErr.Findings)
+			m.appendAILog(job, AILog{
+				Timestamp: time.Now(),
+				Operation: "decode_errors",
+				Provider:  "System",
+				Detail: fmt.Sprintf("FFmpeg exited 0 but reported %d decode error(s) — output incomplete",
+					len(integrityErr.Findings)),
+				Success: false,
+				Error:   strings.Join(integrityErr.Findings, " | "),
+			})
+		} else {
+			log.Printf("[Job %s] FFmpeg failed: %v", job.ID, err)
+		}
 		m.discardOutput(job, destPath, "transcode failed")
 		return err
 	}

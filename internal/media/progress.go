@@ -2,6 +2,7 @@ package media
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -42,35 +43,153 @@ func (f *FFmpegWrapper) TranscodeWithProgress(ctx context.Context, opts Transcod
 		return fmt.Errorf("failed to create stderr pipe: %w", err)
 	}
 
-	// Buffer to capture output for better error reporting
-	var outputBuffer strings.Builder
+	// Keeps a bounded tail for error reporting and scans the whole stream for
+	// decode-error markers as it goes.
+	monitor := newStderrMonitor()
 
 	// Start the command
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start ffmpeg: %w", err)
 	}
 
-	// Parse progress while also capturing output to our buffer
+	// Parse progress while also capturing output to our monitor
 	parseDone := make(chan struct{})
 	go func() {
-		f.parseProgress(io.TeeReader(stderr, &outputBuffer), opts.TotalDuration, callback)
+		f.parseProgress(io.TeeReader(stderr, monitor), opts.TotalDuration, callback)
 		close(parseDone)
 	}()
 
 	// Wait for completion
 	waitErr := cmd.Wait()
-	<-parseDone // Ensure parsing is finished
+	<-parseDone // Ensure parsing is finished; monitor is only read after this
 
 	if waitErr != nil {
-		// Include the last bit of output in the error message
-		output := outputBuffer.String()
-		if len(output) > 2000 {
-			output = "..." + output[len(output)-2000:]
-		}
-		return fmt.Errorf("ffmpeg failed: %w\nOutput:\n%s", waitErr, output)
+		return fmt.Errorf("ffmpeg failed: %w\nOutput:\n%s", waitErr, monitor.Tail())
+	}
+
+	// A zero exit status is not proof of a clean decode. When FFmpeg cannot
+	// allocate decoder buffers it reports the failure, drops the affected
+	// frames, and carries on to exit 0 — producing an output file of the right
+	// duration with picture data missing. Observed on 2160p HEVC sources under
+	// VAAPI memory pressure:
+	//
+	//   Error submitting packet to decoder: Cannot allocate memory
+	//   get_buffer() failed
+	//   Error parsing NAL unit #2
+	//
+	// Neither the exit code nor a duration check catches that, so the stderr
+	// has to be read.
+	if findings := monitor.Findings(); len(findings) > 0 {
+		return &TranscodeIntegrityError{Findings: findings, Tail: monitor.Tail()}
 	}
 
 	return nil
+}
+
+// TranscodeIntegrityError reports that FFmpeg exited successfully but logged
+// errors indicating frames were lost or corrupted during decoding.
+type TranscodeIntegrityError struct {
+	Findings []string // one representative stderr line per distinct problem
+	Tail     string   // bounded tail of stderr, for diagnosis
+}
+
+func (e *TranscodeIntegrityError) Error() string {
+	return fmt.Sprintf("ffmpeg exited 0 but reported %d decode error(s), so the output is missing picture data: %s",
+		len(e.Findings), strings.Join(e.Findings, " | "))
+}
+
+// decodeErrorPatterns are stderr markers that mean picture data was lost.
+// Deliberately conservative: every entry here indicates dropped or corrupt
+// frames, not a recoverable container-level complaint.
+var decodeErrorPatterns = []string{
+	"Error submitting packet to decoder",
+	"get_buffer() failed",
+	"thread_get_buffer() failed",
+	"Error parsing NAL unit",
+	"Decoding error",
+	"corrupt decoded frame",
+	"error while decoding MB",
+}
+
+const (
+	maxStderrTail      = 8 << 10 // bytes of stderr retained for error messages
+	maxDecodeFindings  = 8       // distinct problems recorded before we stop
+	maxUnterminatedRun = 4 << 10 // flush a pathologically long line at this size
+)
+
+// stderrMonitor keeps a bounded tail of FFmpeg's stderr while scanning the full
+// stream for decode-error markers.
+//
+// The previous implementation accumulated the entire stream in a
+// strings.Builder and used only the last 2 KB of it. With "-progress pipe:2"
+// emitting a block of key=value lines several times a second, a multi-hour
+// 2160p transcode retained tens of megabytes to report two kilobytes.
+//
+// Not safe for concurrent use: writes come from the progress-parsing goroutine,
+// and results are only read after that goroutine has finished.
+type stderrMonitor struct {
+	tail     []byte
+	partial  []byte
+	findings []string
+	seen     map[string]bool
+}
+
+func newStderrMonitor() *stderrMonitor {
+	return &stderrMonitor{seen: make(map[string]bool)}
+}
+
+func (m *stderrMonitor) Write(p []byte) (int, error) {
+	m.tail = append(m.tail, p...)
+	if len(m.tail) > maxStderrTail {
+		// Copy in place so the backing array stays bounded.
+		m.tail = append(m.tail[:0], m.tail[len(m.tail)-maxStderrTail:]...)
+	}
+
+	// FFmpeg separates progress updates with \r as well as \n.
+	m.partial = append(m.partial, p...)
+	for {
+		i := bytes.IndexAny(m.partial, "\r\n")
+		if i < 0 {
+			break
+		}
+		m.scanLine(string(m.partial[:i]))
+		m.partial = append(m.partial[:0], m.partial[i+1:]...)
+	}
+	if len(m.partial) > maxUnterminatedRun {
+		m.scanLine(string(m.partial))
+		m.partial = m.partial[:0]
+	}
+
+	return len(p), nil
+}
+
+func (m *stderrMonitor) scanLine(line string) {
+	if len(m.findings) >= maxDecodeFindings {
+		return
+	}
+	for _, pattern := range decodeErrorPatterns {
+		if !strings.Contains(line, pattern) {
+			continue
+		}
+		// Record each distinct problem once. FFmpeg repeats these per frame,
+		// and one representative line is enough to explain the failure.
+		if !m.seen[pattern] {
+			m.seen[pattern] = true
+			m.findings = append(m.findings, strings.TrimSpace(line))
+		}
+		return
+	}
+}
+
+// Findings returns one representative stderr line per distinct decode problem.
+func (m *stderrMonitor) Findings() []string { return m.findings }
+
+// Tail returns the retained end of the stderr stream.
+func (m *stderrMonitor) Tail() string {
+	if len(m.tail) == maxStderrTail {
+		return "..." + string(m.tail)
+	}
+	return string(m.tail)
 }
 
 // parseProgress parses FFmpeg progress output
