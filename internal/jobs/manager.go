@@ -953,6 +953,24 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 	deleteSource := job.DeleteSource
 	job.mu.RUnlock()
 
+	// Replace-in-place writes a temp file beside the source and swaps it in once
+	// validated, so the optimised file takes the source's position in the
+	// library. Without this the output lands in a flat directory that the media
+	// server does not scan, and accumulates there indefinitely.
+	replacing := m.config.ReplaceInPlace && m.config.HoldingDir != ""
+	var replacement replacementPaths
+	if replacing {
+		replacement = planReplacement(sourcePath, job.ID)
+		destPath = replacement.Temp
+		defer m.cleanupTemp(job, replacement.Temp)
+		log.Printf("[Job %s] Replace-in-place: writing %s, will become %s",
+			job.ID, filepath.Base(replacement.Temp), filepath.Base(replacement.Final))
+	} else if m.config.ReplaceInPlace {
+		log.Printf("[Job %s] REPLACE_IN_PLACE is set but HOLDING_DIR is empty — "+
+			"writing to the configured destination instead. Replacement needs somewhere "+
+			"to retain the original.", job.ID)
+	}
+
 	if sourcePath == destPath {
 		return fmt.Errorf("source and destination paths are identical (%s): FFmpeg cannot encode a file in-place", sourcePath)
 	}
@@ -1165,7 +1183,51 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 		verified = true
 	}
 
-	// 5. Delete Source (Safe Delete)
+	// 5. Reintegration. The transcode is validated and, where AI verification is
+	// enabled, verified — so it can now take the source's place in the library.
+	if replacing {
+		if !verified {
+			// Verification is inconclusive or failed. Keep the library exactly
+			// as it is: the temp file is discarded by the deferred cleanup.
+			log.Printf("[Job %s] Skipping replacement — output not verified", job.ID)
+			m.appendAILog(job, AILog{
+				Timestamp: time.Now(),
+				Operation: "reintegration_skipped",
+				Provider:  "System",
+				Detail:    "Output was not verified; library left unchanged",
+				Success:   false,
+			})
+			return fmt.Errorf("replacement skipped: output could not be verified")
+		}
+
+		if err := m.reintegrate(job, replacement); err != nil {
+			log.Printf("[Job %s] Reintegration failed: %v", job.ID, err)
+			m.appendAILog(job, AILog{
+				Timestamp: time.Now(),
+				Operation: "reintegration_failed",
+				Provider:  "System",
+				Detail:    "Could not place the transcode in the library",
+				Success:   false,
+				Error:     err.Error(),
+			})
+			return err
+		}
+
+		// The job's real output is the promoted file, not the temp path.
+		m.updateJob(job, func(j *Job) { j.DestinationPath = replacement.Final })
+
+		// The original has been moved to holding, not deleted — deleteSource is
+		// not the mechanism here and must not also run.
+		return nil
+	}
+
+	// Ownership for the non-replacing path, so outputs are still usable from
+	// outside the container.
+	if err := m.fileOwnership().Apply(destPath); err != nil {
+		log.Printf("[Job %s] Warning: %v", job.ID, err)
+	}
+
+	// 6. Delete Source (Safe Delete)
 	if deleteSource {
 		if verified {
 			log.Printf("[Job %s] Deleting source file: %s", job.ID, sourcePath)

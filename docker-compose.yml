@@ -16,6 +16,13 @@ services:
       - SCANNER_ENABLED=${SCANNER_ENABLED:-false}
       - SCANNER_MODE=${SCANNER_MODE:-manual}
       - SCANNER_PROCESSED_FILE=/data/processed.json
+      - REPLACE_IN_PLACE=${REPLACE_IN_PLACE:-false}
+      - HOLDING_DIR=${HOLDING_DIR:-/storage/.vastiva-replaced}
+      - PUID=${PUID:--1}
+      - PGID=${PGID:--1}
+      # Without this, CORS_ORIGINS never reaches the container and every
+      # deployment silently falls back to the localhost dev defaults.
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
     volumes:
       - ${MEDIA_ROOT:-/mnt/media}:/storage
       - ${MEDIA_ROOT:-/mnt/media}/output:/output
