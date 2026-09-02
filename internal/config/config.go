@@ -69,6 +69,21 @@ type Config struct {
 	DeleteSource   bool `json:"deleteSource"`   // Default: false
 	AutoConvertISO bool `json:"autoConvertISO"` // Default: false
 
+	// Reintegration. With ReplaceInPlace the transcode is written beside its
+	// source and, once validated, takes the source's place in the library —
+	// so Jellyfin sees the optimised file without anything being moved by
+	// hand. The original is moved to HoldingDir rather than deleted, which
+	// keeps every replacement reversible until that directory is emptied.
+	ReplaceInPlace bool   `json:"replaceInPlace"` // Default: false
+	HoldingDir     string `json:"holdingDir"`
+
+	// File ownership for everything this process writes. The container runs as
+	// root, so without these the library fills with root-owned files. -1 leaves
+	// ownership untouched. Named to match the linuxserver convention already
+	// used by the Jellyfin container in the same stack.
+	PUID int `json:"puid"`
+	PGID int `json:"pgid"`
+
 	// Scheduling
 	Schedule ProcessingSchedule `json:"schedule"`
 
@@ -107,6 +122,10 @@ func Load() *Config {
 		SubtitleUsername:     getEnv("SUBTITLE_USERNAME", ""),
 		SubtitlePassword:     getEnv("SUBTITLE_PASSWORD", ""),
 		AutoConvertISO:       getEnvBool("AUTO_CONVERT_ISO", false),
+		ReplaceInPlace:       getEnvBool("REPLACE_IN_PLACE", false),
+		HoldingDir:           getEnv("HOLDING_DIR", ""),
+		PUID:                 getEnvInt("PUID", -1),
+		PGID:                 getEnvInt("PGID", -1),
 	}
 
 	if cfg.GPUVendor == "auto" || cfg.GPUVendor == "" {
@@ -226,6 +245,18 @@ func (c *Config) loadFromDisk() error {
 	}
 	if hasBool("autoConvertISO") {
 		c.AutoConvertISO = importJSON.AutoConvertISO
+	}
+	if hasBool("replaceInPlace") {
+		c.ReplaceInPlace = importJSON.ReplaceInPlace
+	}
+	if importJSON.HoldingDir != "" {
+		c.HoldingDir = importJSON.HoldingDir
+	}
+	if _, ok := rawFields["puid"]; ok {
+		c.PUID = importJSON.PUID
+	}
+	if _, ok := rawFields["pgid"]; ok {
+		c.PGID = importJSON.PGID
 	}
 
 	if importJSON.SubtitleMode != "" {

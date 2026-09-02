@@ -291,7 +291,12 @@ func (s *Scanner) GetStatus() ScanStatus {
 	return s.status
 }
 
-// CompleteProcessed updates a processed file entry with final stats from a job
+// CompleteProcessed updates a processed file entry with final stats from a job.
+//
+// Both the source and the produced output are recorded. Marking only the source
+// is enough while output goes to a directory the scanner does not watch, but
+// replace-in-place puts the result inside the library — where the next scan
+// would treat it as a new source and re-encode it, repeatedly.
 func (s *Scanner) CompleteProcessed(job *jobs.Job) {
 	s.processedDB.MarkProcessed(ProcessedFile{
 		Path:        job.SourcePath,
@@ -304,6 +309,15 @@ func (s *Scanner) CompleteProcessed(job *jobs.Job) {
 		AIUpscale:   job.Upscale,
 		AICleaned:   job.AICleaned,
 	})
+
+	if dest := job.DestinationPath; dest != "" && dest != job.SourcePath {
+		s.processedDB.MarkProcessed(ProcessedFile{
+			Path:        dest,
+			JobID:       job.ID,
+			JobType:     string(job.Type),
+			ProcessedAt: time.Now(),
+		})
+	}
 }
 
 // UpdateConfig updates the scanner configuration and restarts if necessary
@@ -472,6 +486,13 @@ func (s *Scanner) scanDirectory(watchDir WatchDirectory) ([]string, error) {
 			s.statusMu.Lock()
 			s.status.CurrentPath = path
 			s.statusMu.Unlock()
+			return nil
+		}
+
+		// Skip in-progress transcodes. Replace-in-place writes its temp file
+		// into the library with a media extension, so without this the scanner
+		// would queue a job for a file that is still being written.
+		if strings.HasPrefix(info.Name(), jobs.TempFilePrefix) {
 			return nil
 		}
 
