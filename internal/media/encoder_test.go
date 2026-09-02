@@ -111,6 +111,44 @@ func TestColorSignallingOmittedWhenUnknown(t *testing.T) {
 	}
 }
 
+// TestVAAPIEnlargesSurfacePool pins the fix for the production failures.
+//
+// The default VAAPI surface pool is too small for 2160p 10-bit HEVC. The
+// decoder exhausts it, logs "Cannot allocate memory" from get_buffer(), drops
+// frames, and exits 0 anyway. Measured on an Arc A310 over a 60s sample of a
+// 2160p REMUX: 77 decode errors with the default pool, 0 with 32 extra frames.
+func TestVAAPIEnlargesSurfacePool(t *testing.T) {
+	for _, vendor := range []GPUVendor{GPUVendorIntel, GPUVendorAMD} {
+		t.Run(string(vendor), func(t *testing.T) {
+			args := argString(newTestWrapper().buildFFmpegArgs(TranscodeOptions{
+				InputPath:  "/input/test.mkv",
+				OutputPath: "/output/test.mkv",
+				GPUVendor:  vendor,
+				CRF:        23,
+			}))
+			if !strings.Contains(args, "-extra_hw_frames 32") {
+				t.Errorf("VAAPI input args must enlarge the surface pool\ngot: %s", args)
+			}
+		})
+	}
+}
+
+// The pool option is an accelerator input option and must not leak into the
+// software path, where there is no hardware frame context at all.
+func TestCPUPathHasNoHardwareOptions(t *testing.T) {
+	args := argString(newTestWrapper().buildFFmpegArgs(TranscodeOptions{
+		InputPath:  "/input/test.mkv",
+		OutputPath: "/output/test.mkv",
+		GPUVendor:  GPUVendorCPU,
+		CRF:        23,
+	}))
+	for _, unwanted := range []string{"-extra_hw_frames", "-hwaccel", "hwupload"} {
+		if strings.Contains(args, unwanted) {
+			t.Errorf("CPU path must not contain %q\ngot: %s", unwanted, args)
+		}
+	}
+}
+
 func TestNoStdinIsSet(t *testing.T) {
 	args := argString(newTestWrapper().buildFFmpegArgs(TranscodeOptions{
 		InputPath:  "/input/test.mkv",

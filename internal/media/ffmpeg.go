@@ -161,7 +161,28 @@ func (f *FFmpegWrapper) getHWAccelInputArgs(vendor GPUVendor) []string {
 		// Use VAAPI for Intel/AMD on Linux/Docker as it's more reliable than QSV in containers.
 		// allow_profile_mismatch lets FFmpeg fall back to software decoding for source codecs
 		// (e.g. XviD/mpeg4 ASP) that VAAPI cannot decode, instead of aborting.
-		return []string{"-hwaccel", "vaapi", "-hwaccel_device", "/dev/dri/renderD128", "-hwaccel_output_format", "vaapi", "-hwaccel_flags", "allow_profile_mismatch"}
+		//
+		// extra_hw_frames enlarges the VAAPI surface pool. The default is too small
+		// for 2160p 10-bit HEVC: the decoder exhausts it, reports "Cannot allocate
+		// memory" from get_buffer(), drops the affected frames, and still exits 0 —
+		// so the output looks complete and correctly timed while missing picture
+		// data. Under concurrent jobs the allocation fails at startup instead and
+		// FFmpeg dies before writing anything, leaving a 0-byte file.
+		//
+		// Measured on an Arc A310 against a 2160p 10-bit HEVC REMUX, 60s sample:
+		//   default pool       77 decode errors
+		//   extra_hw_frames 32  0 decode errors
+		//
+		// 32 extra 2160p p010 surfaces cost roughly 800 MB of the card's 4 GB.
+		// If this ever needs to vary by hardware it should become configurable;
+		// hardcoded until there is evidence that it does.
+		return []string{
+			"-hwaccel", "vaapi",
+			"-hwaccel_device", "/dev/dri/renderD128",
+			"-hwaccel_output_format", "vaapi",
+			"-hwaccel_flags", "allow_profile_mismatch",
+			"-extra_hw_frames", "32",
+		}
 	default:
 		return []string{}
 	}
