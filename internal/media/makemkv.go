@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/Vasteva/MediaConverter/internal/util"
 )
 
 // MakeMKVWrapper handles MakeMKV disc extraction
@@ -258,17 +260,13 @@ func (m *MakeMKVWrapper) GetOutputFilename(discName string, titleIndex int) stri
 	return fmt.Sprintf("title_t%02d.mkv", titleIndex)
 }
 
-// sanitizeFilename removes invalid characters from filenames
+// sanitizeFilename removes invalid characters from filenames.
+//
+// Delegates to util.SanitizeFilename so there is one implementation of this
+// rule. Filesystem-safety logic that exists in two places drifts, and only one
+// copy gets the fix.
 func sanitizeFilename(name string) string {
-	// Replace invalid characters with underscores
-	invalidChars := regexp.MustCompile(`[<>:"/\\|?*]`)
-	sanitized := invalidChars.ReplaceAllString(name, "_")
-
-	// Remove leading/trailing spaces and dots
-	sanitized = strings.TrimSpace(sanitized)
-	sanitized = strings.Trim(sanitized, ".")
-
-	return sanitized
+	return util.SanitizeFilename(name)
 }
 
 // FindLargestTitle returns the index of the title with the longest duration

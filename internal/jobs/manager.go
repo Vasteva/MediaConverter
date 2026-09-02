@@ -378,43 +378,7 @@ func (m *Manager) processJob(job *Job) {
 
 	// Premium Feature: AI Metadata Cleanup
 	if m.config.IsPremium && m.ai != nil && job.Type == JobTypeOptimize {
-		cleaner := meta.NewCleaner(m.ai)
-		job.mu.RLock()
-		sourcePath := job.SourcePath
-		destPath := job.DestinationPath
-		ctx := job.ctx
-		job.mu.RUnlock()
-
-		filename := filepath.Base(sourcePath)
-		t0Meta := time.Now()
-		if cleanTitle, err := cleaner.CleanFilename(ctx, filename); err == nil {
-			log.Printf("[Premium] AI cleaned filename: %s -> %s", filename, cleanTitle)
-			job.mu.Lock()
-			job.AICleaned = true
-			// Adjust destination path if needed
-			ext := filepath.Ext(destPath)
-			dir := filepath.Dir(destPath)
-			job.DestinationPath = filepath.Join(dir, cleanTitle+ext)
-			job.mu.Unlock()
-			m.appendAILog(job, AILog{
-				Timestamp:  t0Meta,
-				Operation:  "metadata_cleaning",
-				Provider:   m.ai.GetName(),
-				Detail:     fmt.Sprintf("Renamed: '%s' → '%s'", filename, cleanTitle),
-				DurationMs: time.Since(t0Meta).Milliseconds(),
-				Success:    true,
-			})
-		} else {
-			m.appendAILog(job, AILog{
-				Timestamp:  t0Meta,
-				Operation:  "metadata_cleaning",
-				Provider:   m.ai.GetName(),
-				Detail:     "No rename needed",
-				DurationMs: time.Since(t0Meta).Milliseconds(),
-				Success:    false,
-				Error:      err.Error(),
-			})
-		}
+		m.applyAIRename(job)
 	}
 
 	var err error
@@ -634,6 +598,73 @@ func (m *Manager) processJob(job *Job) {
 	if m.OnJobComplete != nil {
 		m.OnJobComplete(job)
 	}
+}
+
+// applyAIRename asks the AI provider for a clean title and, if the result is
+// usable and safe, renames the job's destination file accordingly.
+//
+// The title comes from a model and is turned into a write path, so it gets two
+// independent checks: meta.ExtractTitle sanitises the string, and this function
+// confirms the joined path did not leave the destination directory. Either
+// check failing leaves the original destination untouched — a bad rename is
+// never worth failing an otherwise good transcode over.
+func (m *Manager) applyAIRename(job *Job) {
+	cleaner := meta.NewCleaner(m.ai)
+
+	job.mu.RLock()
+	sourcePath := job.SourcePath
+	destPath := job.DestinationPath
+	ctx := job.ctx
+	job.mu.RUnlock()
+
+	filename := filepath.Base(sourcePath)
+	started := time.Now()
+
+	cleanTitle, err := cleaner.CleanFilename(ctx, filename)
+	if err != nil {
+		m.appendAILog(job, AILog{
+			Timestamp:  started,
+			Operation:  "metadata_cleaning",
+			Provider:   m.ai.GetName(),
+			Detail:     "Keeping original filename",
+			DurationMs: time.Since(started).Milliseconds(),
+			Success:    false,
+			Error:      err.Error(),
+		})
+		return
+	}
+
+	dir := filepath.Dir(destPath)
+	renamed := filepath.Join(dir, cleanTitle+filepath.Ext(destPath))
+
+	if filepath.Dir(renamed) != dir {
+		log.Printf("[Job %s] Rejecting AI rename: %q would write outside %s", job.ID, cleanTitle, dir)
+		m.appendAILog(job, AILog{
+			Timestamp:  started,
+			Operation:  "metadata_cleaning",
+			Provider:   m.ai.GetName(),
+			Detail:     "Rename rejected — resolved outside the destination directory",
+			DurationMs: time.Since(started).Milliseconds(),
+			Success:    false,
+			Error:      fmt.Sprintf("unsafe title: %q", cleanTitle),
+		})
+		return
+	}
+
+	log.Printf("[Job %s] AI cleaned filename: %s -> %s", job.ID, filename, cleanTitle)
+	job.mu.Lock()
+	job.AICleaned = true
+	job.DestinationPath = renamed
+	job.mu.Unlock()
+
+	m.appendAILog(job, AILog{
+		Timestamp:  started,
+		Operation:  "metadata_cleaning",
+		Provider:   m.ai.GetName(),
+		Detail:     fmt.Sprintf("Renamed: '%s' → '%s'", filename, cleanTitle),
+		DurationMs: time.Since(started).Milliseconds(),
+		Success:    true,
+	})
 }
 
 func (m *Manager) isInScheduleWindow() bool {
