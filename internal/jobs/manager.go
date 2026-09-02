@@ -4,6 +4,7 @@ import (
 	"container/heap"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -82,6 +83,28 @@ type Job struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	cmd    *exec.Cmd
+}
+
+// MarshalJSON serialises a Job while holding its read lock.
+//
+// Worker goroutines mutate Progress, FPS, ETA, Status and StatusDetail
+// continuously during a transcode — the FFmpeg progress callback fires several
+// times a second. Meanwhile three separate call sites serialise jobs from other
+// goroutines: Manager.Save, the /api/jobs handler via GetAllJobs, and the SSE
+// broadcaster on every update. None of them took job.mu, which the race
+// detector reports on any run that processes a job.
+//
+// Locking at the marshal boundary fixes all three at once, and any call site
+// added later, without changing a single signature.
+func (j *Job) MarshalJSON() ([]byte, error) {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+
+	// The local type sheds this method, so the nested Marshal does not recurse.
+	// Converting the pointer avoids copying the struct — and its mutex — which
+	// go vet's copylocks check would reject.
+	type jobFields Job
+	return json.Marshal((*jobFields)(j))
 }
 
 // priorityQueue implements heap.Interface for *Job.
@@ -234,14 +257,17 @@ func (m *Manager) AddJob(job *Job) {
 
 func (m *Manager) PurgeJobs(status Status) int {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	count := 0
 	for id, job := range m.jobs {
-		if job.Status == status {
+		if job.GetStatus() == status {
 			delete(m.jobs, id)
 			count++
 		}
 	}
+	m.mu.Unlock()
+
+	// Save takes m.mu itself, so it must not be called while the write lock is
+	// held. See the note on Save.
 	if count > 0 {
 		m.Save()
 	}
@@ -277,20 +303,40 @@ func (m *Manager) GetVideoResolution(ctx context.Context, path string) (width, h
 }
 
 func (m *Manager) CancelJob(id string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if job, ok := m.jobs[id]; ok {
-		if job.cancel != nil {
-			job.cancel()
-		}
-		job.Status = StatusCancelled
-		m.Save()
-		if m.OnJobUpdate != nil {
-			m.OnJobUpdate(job)
-		}
-		return true
+	m.mu.RLock()
+	job, ok := m.jobs[id]
+	m.mu.RUnlock()
+	if !ok {
+		return false
 	}
-	return false
+
+	// cancel and Status are both guarded by job.mu — cancel is assigned in
+	// processJob under that lock, and Status is written by the worker on every
+	// state change.
+	job.mu.Lock()
+	if job.cancel != nil {
+		job.cancel()
+	}
+	job.Status = StatusCancelled
+	job.mu.Unlock()
+
+	// Save takes m.mu itself, so it must not be called while a manager lock is
+	// held. See the note on Save.
+	m.Save()
+	if m.OnJobUpdate != nil {
+		m.OnJobUpdate(job)
+	}
+	return true
+}
+
+// GetStatus returns the job's current status under its lock.
+//
+// Status is written by the worker goroutine throughout a transcode, so reading
+// the field directly from any other goroutine is a data race.
+func (j *Job) GetStatus() Status {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return j.Status
 }
 
 // RetryJob resets a job and adds it back to the priority queue
@@ -377,43 +423,7 @@ func (m *Manager) processJob(job *Job) {
 
 	// Premium Feature: AI Metadata Cleanup
 	if m.config.IsPremium && m.ai != nil && job.Type == JobTypeOptimize {
-		cleaner := meta.NewCleaner(m.ai)
-		job.mu.RLock()
-		sourcePath := job.SourcePath
-		destPath := job.DestinationPath
-		ctx := job.ctx
-		job.mu.RUnlock()
-
-		filename := filepath.Base(sourcePath)
-		t0Meta := time.Now()
-		if cleanTitle, err := cleaner.CleanFilename(ctx, filename); err == nil {
-			log.Printf("[Premium] AI cleaned filename: %s -> %s", filename, cleanTitle)
-			job.mu.Lock()
-			job.AICleaned = true
-			// Adjust destination path if needed
-			ext := filepath.Ext(destPath)
-			dir := filepath.Dir(destPath)
-			job.DestinationPath = filepath.Join(dir, cleanTitle+ext)
-			job.mu.Unlock()
-			m.appendAILog(job, AILog{
-				Timestamp:  t0Meta,
-				Operation:  "metadata_cleaning",
-				Provider:   m.ai.GetName(),
-				Detail:     fmt.Sprintf("Renamed: '%s' → '%s'", filename, cleanTitle),
-				DurationMs: time.Since(t0Meta).Milliseconds(),
-				Success:    true,
-			})
-		} else {
-			m.appendAILog(job, AILog{
-				Timestamp:  t0Meta,
-				Operation:  "metadata_cleaning",
-				Provider:   m.ai.GetName(),
-				Detail:     "No rename needed",
-				DurationMs: time.Since(t0Meta).Milliseconds(),
-				Success:    false,
-				Error:      err.Error(),
-			})
-		}
+		m.applyAIRename(job)
 	}
 
 	var err error
@@ -635,6 +645,73 @@ func (m *Manager) processJob(job *Job) {
 	}
 }
 
+// applyAIRename asks the AI provider for a clean title and, if the result is
+// usable and safe, renames the job's destination file accordingly.
+//
+// The title comes from a model and is turned into a write path, so it gets two
+// independent checks: meta.ExtractTitle sanitises the string, and this function
+// confirms the joined path did not leave the destination directory. Either
+// check failing leaves the original destination untouched — a bad rename is
+// never worth failing an otherwise good transcode over.
+func (m *Manager) applyAIRename(job *Job) {
+	cleaner := meta.NewCleaner(m.ai)
+
+	job.mu.RLock()
+	sourcePath := job.SourcePath
+	destPath := job.DestinationPath
+	ctx := job.ctx
+	job.mu.RUnlock()
+
+	filename := filepath.Base(sourcePath)
+	started := time.Now()
+
+	cleanTitle, err := cleaner.CleanFilename(ctx, filename)
+	if err != nil {
+		m.appendAILog(job, AILog{
+			Timestamp:  started,
+			Operation:  "metadata_cleaning",
+			Provider:   m.ai.GetName(),
+			Detail:     "Keeping original filename",
+			DurationMs: time.Since(started).Milliseconds(),
+			Success:    false,
+			Error:      err.Error(),
+		})
+		return
+	}
+
+	dir := filepath.Dir(destPath)
+	renamed := filepath.Join(dir, cleanTitle+filepath.Ext(destPath))
+
+	if filepath.Dir(renamed) != dir {
+		log.Printf("[Job %s] Rejecting AI rename: %q would write outside %s", job.ID, cleanTitle, dir)
+		m.appendAILog(job, AILog{
+			Timestamp:  started,
+			Operation:  "metadata_cleaning",
+			Provider:   m.ai.GetName(),
+			Detail:     "Rename rejected — resolved outside the destination directory",
+			DurationMs: time.Since(started).Milliseconds(),
+			Success:    false,
+			Error:      fmt.Sprintf("unsafe title: %q", cleanTitle),
+		})
+		return
+	}
+
+	log.Printf("[Job %s] AI cleaned filename: %s -> %s", job.ID, filename, cleanTitle)
+	job.mu.Lock()
+	job.AICleaned = true
+	job.DestinationPath = renamed
+	job.mu.Unlock()
+
+	m.appendAILog(job, AILog{
+		Timestamp:  started,
+		Operation:  "metadata_cleaning",
+		Provider:   m.ai.GetName(),
+		Detail:     fmt.Sprintf("Renamed: '%s' → '%s'", filename, cleanTitle),
+		DurationMs: time.Since(started).Milliseconds(),
+		Success:    true,
+	})
+}
+
 func (m *Manager) isInScheduleWindow() bool {
 	sched := m.config.Schedule
 	if !sched.Enabled {
@@ -797,14 +874,36 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 
 	log.Printf("[Job %s] Starting optimization: %s", job.ID, sourcePath)
 
-	// 1. Get media info for duration
+	// 1. Probe the source. Everything downstream — encoder profile, colour
+	// signalling, and the output validation gate — is derived from this.
 	info, err := m.ffmpeg.GetMediaInfo(job.ctx, sourcePath)
 	if err != nil {
 		log.Printf("[Job %s] Error getting media info: %v", job.ID, err)
 		return fmt.Errorf("failed to get media info: %w", err)
 	}
 
-	log.Printf("[Job %s] Media duration: %.2f seconds", job.ID, info.Duration)
+	log.Printf("[Job %s] Source: %.2fs, %dx%d, %s (%d-bit), transfer=%q, DV profile=%d",
+		job.ID, info.Duration, info.VideoWidth, info.VideoHeight,
+		info.PixFmt, info.BitDepth, info.ColorTransfer, info.DVProfile)
+
+	// Reject inputs this pipeline cannot encode correctly, rather than emitting
+	// a broken file that looks like a success.
+	if err := media.CheckSourceSupported(info); err != nil {
+		log.Printf("[Job %s] %v", job.ID, err)
+		m.appendAILog(job, AILog{
+			Timestamp: time.Now(),
+			Operation: "source_rejected",
+			Provider:  "System",
+			Detail:    err.Error(),
+			Success:   false,
+			Error:     err.Error(),
+		})
+		return err
+	}
+	if info.IsDolbyVision() {
+		log.Printf("[Job %s] Note: Dolby Vision profile %d — encoding the HDR10 base layer; "+
+			"Dolby Vision metadata will not survive the re-encode", job.ID, info.DVProfile)
+	}
 
 	// 2. Premium Feature: AI Adaptive Encoding
 	crf := m.config.CRF
@@ -812,8 +911,11 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 		cleaner := meta.NewCleaner(m.ai)
 		log.Printf("[Premium] AI analyzing media for optimal encoding settings...")
 		t0Enc := time.Now()
-		if suggestedCRF, err := cleaner.AnalyzeEncoding(job.ctx, info.RawJSON); err == nil {
-			log.Printf("[Premium] AI suggested CRF: %d (System Default: %d)", suggestedCRF, crf)
+		// Pass a short summary rather than the full ffprobe dump: for a UHD
+		// REMUX with 48 streams the raw JSON is tens of kilobytes that bury the
+		// few facts the decision actually turns on.
+		if suggestedCRF, err := cleaner.AnalyzeEncoding(job.ctx, info.EncodingSummary()); err == nil {
+			log.Printf("[Job %s] AI suggested CRF %d (system default %d)", job.ID, suggestedCRF, crf)
 			defaultCRF := crf
 			crf = suggestedCRF
 			m.appendAILog(job, AILog{
@@ -825,14 +927,18 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 				Success:    true,
 			})
 		} else {
-			log.Printf("[Premium] AI analysis failed: %v", err)
+			// Not an error condition: the configured CRF is a perfectly good
+			// answer, and this path is taken whenever the model declines to
+			// produce a usable number. Logged at info level so it stops looking
+			// like a fault in the logs.
+			log.Printf("[Job %s] No AI CRF suggestion, using configured CRF %d (%v)", job.ID, crf, err)
 			m.appendAILog(job, AILog{
 				Timestamp:  t0Enc,
 				Operation:  "encoding_analysis",
 				Provider:   m.ai.GetName(),
-				Detail:     fmt.Sprintf("Analysis failed, using CRF %d", crf),
+				Detail:     fmt.Sprintf("No suggestion available — using configured CRF %d", crf),
 				DurationMs: time.Since(t0Enc).Milliseconds(),
-				Success:    false,
+				Success:    true,
 				Error:      err.Error(),
 			})
 		}
@@ -852,15 +958,16 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 	}
 
 	opts := media.TranscodeOptions{
-		InputPath:     sourcePath,
-		OutputPath:    destPath,
-		GPUVendor:     media.GPUVendor(m.config.GPUVendor),
-		Preset:        media.QualityPreset(m.config.QualityPreset),
-		CRF:           crf,
-		TotalDuration: info.Duration,
-		Upscale:       upscale,
-		Resolution:    resolution,
+		InputPath:  sourcePath,
+		OutputPath: destPath,
+		GPUVendor:  media.GPUVendor(m.config.GPUVendor),
+		Preset:     media.QualityPreset(m.config.QualityPreset),
+		CRF:        crf,
+		Upscale:    upscale,
+		Resolution: resolution,
 	}
+	// Carries duration, bit depth, and colour signalling from the probe.
+	opts.ApplySourceInfo(info)
 
 	log.Printf("[Job %s] Starting ffmpeg transcoding to: %s", job.ID, opts.OutputPath)
 	t0Trans := time.Now()
@@ -881,9 +988,56 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 		})
 	})
 	if err != nil {
-		log.Printf("[Job %s] FFmpeg failed: %v", job.ID, err)
+		var integrityErr *media.TranscodeIntegrityError
+		if errors.As(err, &integrityErr) {
+			// FFmpeg exited 0 but dropped frames. Report it as its own failure
+			// mode — it is not a crash, and calling it one hides the cause.
+			log.Printf("[Job %s] Decode errors during transcode, output discarded: %v",
+				job.ID, integrityErr.Findings)
+			m.appendAILog(job, AILog{
+				Timestamp: time.Now(),
+				Operation: "decode_errors",
+				Provider:  "System",
+				Detail: fmt.Sprintf("FFmpeg exited 0 but reported %d decode error(s) — output incomplete",
+					len(integrityErr.Findings)),
+				Success: false,
+				Error:   strings.Join(integrityErr.Findings, " | "),
+			})
+		} else {
+			log.Printf("[Job %s] FFmpeg failed: %v", job.ID, err)
+		}
+		m.discardOutput(job, destPath, "transcode failed")
 		return err
 	}
+
+	// Validate before believing the exit code. A transcode can stop early and
+	// leave a well-formed but truncated file, which exits zero and passes an
+	// existence check. Nothing downstream — success status, source deletion —
+	// may happen until this passes.
+	m.updateJob(job, func(j *Job) { j.StatusDetail = "Validating" })
+	t0Val := time.Now()
+	if valErr := m.ffmpeg.ValidateOutput(job.ctx, info, destPath); valErr != nil {
+		log.Printf("[Job %s] Output rejected: %v", job.ID, valErr)
+		m.appendAILog(job, AILog{
+			Timestamp:  t0Val,
+			Operation:  "output_validation",
+			Provider:   "System",
+			Detail:     "Output rejected — see error",
+			DurationMs: time.Since(t0Val).Milliseconds(),
+			Success:    false,
+			Error:      valErr.Error(),
+		})
+		m.discardOutput(job, destPath, "failed validation")
+		return valErr
+	}
+	m.appendAILog(job, AILog{
+		Timestamp:  t0Val,
+		Operation:  "output_validation",
+		Provider:   "System",
+		Detail:     "Output validated: duration, streams and size within tolerance",
+		DurationMs: time.Since(t0Val).Milliseconds(),
+		Success:    true,
+	})
 
 	log.Printf("[Job %s] Transcoding completed successfully", job.ID)
 	m.appendAILog(job, AILog{
@@ -958,24 +1112,24 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 
 		t0Ver := time.Now()
 		if vOk, vErr := m.runVerificationFromPaths(job, sourcePath, destPath); vErr != nil {
-			log.Printf("Warning: AI Verification failed to execute: %v", vErr)
-			m.updateJob(job, func(j *Job) {
-				j.Error = fmt.Sprintf("Verification error: %v", vErr)
-			})
+			// The check could not be run. Treat that as inconclusive rather than
+			// as a pass: the deterministic gate above already cleared the output,
+			// so keep it and complete the job, but leave Verified false so the
+			// source is not deleted.
+			log.Printf("[Job %s] Warning: AI verification could not run: %v", job.ID, vErr)
 			m.appendAILog(job, AILog{
 				Timestamp:  t0Ver,
 				Operation:  "verification",
 				Provider:   m.ai.GetName(),
-				Detail:     "Verification failed to execute",
+				Detail:     "Verification could not run — output kept, source retained",
 				DurationMs: time.Since(t0Ver).Milliseconds(),
 				Success:    false,
 				Error:      vErr.Error(),
 			})
 		} else if !vOk {
-			log.Printf("[Premium] FAILURE: AI detected corruption in output video.")
-			m.updateJob(job, func(j *Job) {
-				j.Error = "AI Verification Failed: Corruption detected"
-			})
+			// The model looked at the output and judged it broken. That is a
+			// failed job, not a successful one with a note attached.
+			log.Printf("[Job %s] FAILURE: AI detected corruption in output video.", job.ID)
 			m.appendAILog(job, AILog{
 				Timestamp:  t0Ver,
 				Operation:  "verification",
@@ -984,7 +1138,8 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 				DurationMs: time.Since(t0Ver).Milliseconds(),
 				Success:    false,
 			})
-			// We do NOT set verified=true
+			m.discardOutput(job, destPath, "failed AI verification")
+			return fmt.Errorf("AI verification failed: corruption detected in output")
 		} else {
 			log.Printf("[Premium] SUCCESS: Video integrity verified by AI.")
 			verified = true
@@ -1001,14 +1156,13 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 			})
 		}
 	} else {
-		// AI verification not available (not premium, no AI, or verifyOutput disabled).
-		// Still require the output file to exist and be non-empty before allowing
-		// source deletion, to guard against silent failures.
-		if info, statErr := os.Stat(destPath); statErr == nil && info.Size() > 0 {
-			verified = true
-		} else {
-			log.Printf("[Job %s] WARNING: deleteSource requested but output file is missing or empty: %s", job.ID, destPath)
-		}
+		// AI verification not available (not premium, no AI, or verifyOutput
+		// disabled). The deterministic gate above has already confirmed the
+		// output is a complete, probeable transcode of the source — duration,
+		// streams and size all within tolerance — which is a far stronger
+		// guarantee than the size>0 check this replaced. That check accepted a
+		// 2.7 MB stub of a 60 GB source as grounds for deleting the original.
+		verified = true
 	}
 
 	// 5. Delete Source (Safe Delete)
@@ -1037,6 +1191,40 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 
 func (m *Manager) runOptimization(job *Job) error {
 	return m.runOptimizationFromPath(job, job.SourcePath)
+}
+
+// discardOutput removes a rejected transcode output so a broken file is never
+// left sitting at the destination looking like a successful conversion.
+//
+// FFmpeg creates the output file before it starts encoding, so an encoder that
+// fails at initialisation leaves a 0-byte file behind, and one that dies partway
+// leaves a truncated one. Neither is distinguishable from a good result by
+// looking at the directory.
+func (m *Manager) discardOutput(job *Job, destPath, reason string) {
+	if destPath == "" {
+		return
+	}
+	fi, err := os.Stat(destPath)
+	if err != nil {
+		return // nothing was written
+	}
+	if fi.IsDir() {
+		log.Printf("[Job %s] Refusing to discard %s: it is a directory", job.ID, destPath)
+		return
+	}
+	if err := os.Remove(destPath); err != nil {
+		log.Printf("[Job %s] Warning: could not remove rejected output %s: %v", job.ID, destPath, err)
+		return
+	}
+	log.Printf("[Job %s] Removed rejected output (%s, %d bytes): %s",
+		job.ID, reason, fi.Size(), destPath)
+	m.appendAILog(job, AILog{
+		Timestamp: time.Now(),
+		Operation: "output_discarded",
+		Provider:  "System",
+		Detail:    fmt.Sprintf("Removed %d-byte output — %s", fi.Size(), reason),
+		Success:   true,
+	})
 }
 
 func (m *Manager) runVerificationFromPaths(job *Job, srcPath, destPath string) (bool, error) {
@@ -1119,7 +1307,13 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
 }
 
-// Save persists all jobs to disk
+// Save persists all jobs to disk.
+//
+// Takes m.mu itself, so callers must not hold any manager lock when calling it.
+// RWMutex is not reentrant: CancelJob and PurgeJobs previously called Save
+// while holding m.mu.Lock(), which deadlocked the goroutine against a lock it
+// already held and left the mutex permanently locked — wedging every later
+// GetAllJobs, AddJob and Save behind it. Both are wired to UI buttons.
 func (m *Manager) Save() error {
 	if m.jobsFilePath == "" {
 		return nil // No persistence configured
@@ -1188,7 +1382,7 @@ func (m *Manager) RequeuePendingJobs() {
 	m.mu.RLock()
 	pending := make([]*Job, 0)
 	for _, job := range m.jobs {
-		if job.Status == StatusPending {
+		if job.GetStatus() == StatusPending {
 			pending = append(pending, job)
 		}
 	}
