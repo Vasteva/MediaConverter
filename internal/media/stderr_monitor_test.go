@@ -50,6 +50,46 @@ func TestStderrMonitorDetectsDecodeErrors(t *testing.T) {
 	}
 }
 
+// Real stderr tail from a 1080p VAAPI transcode on an Arc A310 that ran the
+// full 1h43m film and then failed on the final frame. None of the decode-side
+// patterns appear — the failure is entirely on the filter side. FFmpeg here
+// exited non-zero, but the same message can accompany an exit 0 with the last
+// frames simply missing, which is what this guards against.
+const arcA310FilterFailure = `frame=155452 fps=544 q=-0.0 size= 2542080kB time=01:43:38.59 bitrate=3348.8kbits/s speed=21.8x
+[vf#0:0 @ 0x62ffc12bef40] Error while filtering: Cannot allocate memory
+Failed to inject frame into filter network: Cannot allocate memory
+Error while filtering: Cannot allocate memory
+[out#0/matroska @ 0x62ffc130e180] video:1392231kB audio:1145873kB subtitle:0kB
+frame=155505 fps=543 q=-0.0 Lsize= 2543232kB time=01:43:40.65 bitrate=3349.2kbits/s speed=21.7x
+`
+
+func TestStderrMonitorDetectsFilterErrors(t *testing.T) {
+	m := newStderrMonitor()
+	if _, err := m.Write([]byte(arcA310FilterFailure)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	findings := m.Findings()
+	if len(findings) == 0 {
+		t.Fatal("filter-side frame loss was not detected — the job would exit 0 with frames missing")
+	}
+	for _, want := range []string{
+		"Error while filtering",
+		"Failed to inject frame into filter network",
+	} {
+		found := false
+		for _, f := range findings {
+			if strings.Contains(f, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected a finding containing %q, got %v", want, findings)
+		}
+	}
+}
+
 // A clean transcode must not be failed. Progress output is written to the same
 // stream and contains no decode markers.
 func TestStderrMonitorIgnoresCleanOutput(t *testing.T) {

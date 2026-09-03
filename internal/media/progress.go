@@ -44,7 +44,7 @@ func (f *FFmpegWrapper) TranscodeWithProgress(ctx context.Context, opts Transcod
 	}
 
 	// Keeps a bounded tail for error reporting and scans the whole stream for
-	// decode-error markers as it goes.
+	// frame-loss markers as it goes.
 	monitor := newStderrMonitor()
 
 	// Start the command
@@ -67,18 +67,16 @@ func (f *FFmpegWrapper) TranscodeWithProgress(ctx context.Context, opts Transcod
 		return fmt.Errorf("ffmpeg failed: %w\nOutput:\n%s", waitErr, monitor.Tail())
 	}
 
-	// A zero exit status is not proof of a clean decode. When FFmpeg cannot
-	// allocate decoder buffers it reports the failure, drops the affected
-	// frames, and carries on to exit 0 — producing an output file of the right
-	// duration with picture data missing. Observed on 2160p HEVC sources under
-	// VAAPI memory pressure:
+	// A zero exit status is not proof of a clean run. Under VAAPI memory
+	// pressure FFmpeg reports a per-frame failure, drops the affected frames,
+	// and carries on to exit 0 — producing an output of the right duration with
+	// picture data missing. It happens on both sides of the graph:
 	//
-	//   Error submitting packet to decoder: Cannot allocate memory
-	//   get_buffer() failed
-	//   Error parsing NAL unit #2
+	//   Error submitting packet to decoder: Cannot allocate memory   (decode)
+	//   Failed to inject frame into filter network: Cannot allocate memory
 	//
-	// Neither the exit code nor a duration check catches that, so the stderr
-	// has to be read.
+	// Neither the exit code nor a duration check catches it, so the stderr has
+	// to be read.
 	if findings := monitor.Findings(); len(findings) > 0 {
 		return &TranscodeIntegrityError{Findings: findings, Tail: monitor.Tail()}
 	}
@@ -87,21 +85,23 @@ func (f *FFmpegWrapper) TranscodeWithProgress(ctx context.Context, opts Transcod
 }
 
 // TranscodeIntegrityError reports that FFmpeg exited successfully but logged
-// errors indicating frames were lost or corrupted during decoding.
+// errors indicating frames were lost or corrupted while decoding or filtering.
 type TranscodeIntegrityError struct {
 	Findings []string // one representative stderr line per distinct problem
 	Tail     string   // bounded tail of stderr, for diagnosis
 }
 
 func (e *TranscodeIntegrityError) Error() string {
-	return fmt.Sprintf("ffmpeg exited 0 but reported %d decode error(s), so the output is missing picture data: %s",
+	return fmt.Sprintf("ffmpeg exited 0 but reported %d frame-loss error(s), so the output is missing picture data: %s",
 		len(e.Findings), strings.Join(e.Findings, " | "))
 }
 
-// decodeErrorPatterns are stderr markers that mean picture data was lost.
-// Deliberately conservative: every entry here indicates dropped or corrupt
-// frames, not a recoverable container-level complaint.
-var decodeErrorPatterns = []string{
+// frameLossPatterns are stderr markers that mean picture data was lost — a
+// frame FFmpeg failed to decode, filter, or otherwise carry through to the
+// encoder. Deliberately conservative: every entry indicates a dropped or
+// corrupt frame, not a recoverable container-level complaint.
+var frameLossPatterns = []string{
+	// Decode side: the surface pool is exhausted or the bitstream is damaged.
 	"Error submitting packet to decoder",
 	"get_buffer() failed",
 	"thread_get_buffer() failed",
@@ -109,16 +109,23 @@ var decodeErrorPatterns = []string{
 	"Decoding error",
 	"corrupt decoded frame",
 	"error while decoding MB",
+	// Filter side: a frame reached the filter graph but could not pass through
+	// it. Seen on a 1080p VAAPI transcode that ran the entire film and then
+	// failed on the final frame with "Cannot allocate memory" — none of the
+	// decode-side patterns fired, so without these the job would exit 0 with
+	// frames missing from the end.
+	"Error while filtering",
+	"Failed to inject frame into filter network",
 }
 
 const (
-	maxStderrTail      = 8 << 10 // bytes of stderr retained for error messages
-	maxDecodeFindings  = 8       // distinct problems recorded before we stop
-	maxUnterminatedRun = 4 << 10 // flush a pathologically long line at this size
+	maxStderrTail        = 8 << 10 // bytes of stderr retained for error messages
+	maxFrameLossFindings = 8       // distinct problems recorded before we stop
+	maxUnterminatedRun   = 4 << 10 // flush a pathologically long line at this size
 )
 
 // stderrMonitor keeps a bounded tail of FFmpeg's stderr while scanning the full
-// stream for decode-error markers.
+// stream for frame-loss markers.
 //
 // The previous implementation accumulated the entire stream in a
 // strings.Builder and used only the last 2 KB of it. With "-progress pipe:2"
@@ -164,10 +171,10 @@ func (m *stderrMonitor) Write(p []byte) (int, error) {
 }
 
 func (m *stderrMonitor) scanLine(line string) {
-	if len(m.findings) >= maxDecodeFindings {
+	if len(m.findings) >= maxFrameLossFindings {
 		return
 	}
-	for _, pattern := range decodeErrorPatterns {
+	for _, pattern := range frameLossPatterns {
 		if !strings.Contains(line, pattern) {
 			continue
 		}
@@ -181,7 +188,7 @@ func (m *stderrMonitor) scanLine(line string) {
 	}
 }
 
-// Findings returns one representative stderr line per distinct decode problem.
+// Findings returns one representative stderr line per distinct frame-loss problem.
 func (m *stderrMonitor) Findings() []string { return m.findings }
 
 // Tail returns the retained end of the stderr stream.
