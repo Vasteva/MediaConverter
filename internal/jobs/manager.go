@@ -726,7 +726,7 @@ func (m *Manager) applyAIRename(job *Job) {
 	filename := filepath.Base(sourcePath)
 	started := time.Now()
 
-	cleanTitle, err := cleaner.CleanFilename(ctx, filename)
+	cleanTitle, source, err := cleaner.CleanFilename(ctx, filename)
 	if err != nil {
 		m.appendAILog(job, AILog{
 			Timestamp:  started,
@@ -757,7 +757,7 @@ func (m *Manager) applyAIRename(job *Job) {
 		return
 	}
 
-	log.Printf("[Job %s] AI cleaned filename: %s -> %s", job.ID, filename, cleanTitle)
+	log.Printf("[Job %s] Renamed via %s: %s -> %s", job.ID, source, filename, cleanTitle)
 	job.mu.Lock()
 	job.AICleaned = true
 	job.DestinationPath = renamed
@@ -767,7 +767,7 @@ func (m *Manager) applyAIRename(job *Job) {
 		Timestamp:  started,
 		Operation:  "metadata_cleaning",
 		Provider:   m.ai.GetName(),
-		Detail:     fmt.Sprintf("Renamed: '%s' → '%s'", filename, cleanTitle),
+		Detail:     fmt.Sprintf("Renamed via %s: '%s' → '%s'", source, filename, cleanTitle),
 		DurationMs: time.Since(started).Milliseconds(),
 		Success:    true,
 	})

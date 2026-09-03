@@ -22,10 +22,33 @@ func NewCleaner(p ai.Provider) *Cleaner {
 	return &Cleaner{provider: p}
 }
 
-// CleanFilename uses AI to parse a messy filename and return a clean title and year
-func (c *Cleaner) CleanFilename(ctx context.Context, filename string) (string, error) {
+// NameSource records how a title was produced, so callers can report it.
+type NameSource string
+
+const (
+	SourceParser NameSource = "filename parser"
+	SourceModel  NameSource = "AI"
+)
+
+// CleanFilename derives a clean title and year from a media filename.
+//
+// The deterministic parser runs first and handles the overwhelming majority of
+// a real library, because scene filenames are a regular format —
+// Title.Year.Quality.Codec-GROUP — and a regular format should be parsed rather
+// than guessed at. The model is consulted only for names the parser cannot make
+// sense of.
+//
+// This inversion is the fix for titles losing words. A model turned
+// "28.Days.Later.2002.REPACK..." into "Days Later", and no amount of output
+// validation catches that: "Days Later" is a well-formed, plausible title. A
+// parser cannot drop a token, so the reliable path is not to ask.
+func (c *Cleaner) CleanFilename(ctx context.Context, filename string) (string, NameSource, error) {
+	if parsed := util.ParseSceneName(filename); parsed.Usable() {
+		return parsed.String(), SourceParser, nil
+	}
+
 	if c.provider == nil {
-		return "", fmt.Errorf("AI provider not configured")
+		return "", SourceParser, fmt.Errorf("filename could not be parsed and no AI provider is configured")
 	}
 
 	// The example output is deliberately unquoted. An earlier version wrapped it
@@ -45,14 +68,59 @@ Example output: The Matrix (1999)`, filename)
 
 	cleaned, err := c.provider.Analyze(ctx, prompt)
 	if err != nil {
-		return "", err
+		return "", SourceModel, err
 	}
 
 	title, err := ExtractTitle(cleaned)
 	if err != nil {
-		return "", fmt.Errorf("unusable AI response %q: %w", truncateForError(cleaned), err)
+		return "", SourceModel, fmt.Errorf("unusable AI response %q: %w", truncateForError(cleaned), err)
 	}
-	return title, nil
+
+	if err := checkTitleAgainstSource(title, filename); err != nil {
+		return "", SourceModel, err
+	}
+	return title, SourceModel, nil
+}
+
+// minSourceOverlap is the fraction of a model-supplied title's words that must
+// also appear in the source filename.
+//
+// Deliberately lenient rather than exact. A model legitimately expands
+// abbreviations and adds subtitles a filename omits, so demanding a perfect
+// match would reject good answers. The purpose here is narrower: catch a title
+// with no relationship to the file at all, which is what an overloaded or
+// confused model produces.
+const minSourceOverlap = 0.5
+
+var wordPattern = regexp.MustCompile(`[\p{L}\p{N}]+`)
+
+// checkTitleAgainstSource rejects a model title that bears no resemblance to
+// the filename it came from.
+func checkTitleAgainstSource(title, filename string) error {
+	haystack := strings.ToLower(filename)
+
+	words := wordPattern.FindAllString(strings.ToLower(title), -1)
+	significant, matched := 0, 0
+	for _, w := range words {
+		if len(w) < 2 {
+			continue // initials and single digits match too easily to be evidence
+		}
+		significant++
+		if strings.Contains(haystack, w) {
+			matched++
+		}
+	}
+
+	if significant == 0 {
+		return fmt.Errorf("title %q has no words to check against the filename", title)
+	}
+	if ratio := float64(matched) / float64(significant); ratio < minSourceOverlap {
+		return fmt.Errorf(
+			"title %q shares only %.0f%% of its words with the filename, below the %.0f%% floor — "+
+				"the model likely did not recognise this file",
+			title, ratio*100, minSourceOverlap*100)
+	}
+	return nil
 }
 
 // maxTitleRunes rejects responses long enough to be prose rather than a title.
