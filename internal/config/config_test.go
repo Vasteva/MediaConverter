@@ -1,7 +1,9 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -54,5 +56,88 @@ func TestGetEnvDefaults(t *testing.T) {
 	}
 	if cfg.ScannerEnabled != false {
 		t.Errorf("expected default ScannerEnabled false, got %v", cfg.ScannerEnabled)
+	}
+}
+
+// TestScheduleAlwaysMarshalsAllowedDaysAsArray covers the crash that blanked
+// the settings page.
+//
+// A nil []int marshals to JSON null, and the zero-value schedule — any config
+// that never had one set — hit that path. The settings UI calls
+// schedule.allowedDays.includes(...) directly, so null threw a TypeError as
+// soon as the day picker rendered, unmounting the page.
+func TestScheduleAlwaysMarshalsAllowedDaysAsArray(t *testing.T) {
+	cases := []struct {
+		name string
+		in   ProcessingSchedule
+		want string
+	}{
+		{
+			name: "zero value",
+			in:   ProcessingSchedule{},
+			want: `"allowedDays":[]`,
+		},
+		{
+			name: "explicitly nil",
+			in:   ProcessingSchedule{Enabled: true, AllowedDays: nil},
+			want: `"allowedDays":[]`,
+		},
+		{
+			name: "empty slice",
+			in:   ProcessingSchedule{AllowedDays: []int{}},
+			want: `"allowedDays":[]`,
+		},
+		{
+			name: "populated is untouched",
+			in:   ProcessingSchedule{AllowedDays: []int{1, 2, 3}},
+			want: `"allowedDays":[1,2,3]`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(tc.in)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			if !strings.Contains(string(data), tc.want) {
+				t.Errorf("got %s, want it to contain %s", data, tc.want)
+			}
+			if strings.Contains(string(data), "null") {
+				t.Errorf("response contains null: %s", data)
+			}
+		})
+	}
+}
+
+// The schedule is marshaled as part of the whole config too — via the API
+// response and via Save to /data/config.json.
+func TestConfigMarshalsScheduleWithoutNull(t *testing.T) {
+	data, err := json.Marshal(&Config{})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"allowedDays":[]`) {
+		t.Errorf("nested schedule should emit an array, got: %s", data)
+	}
+}
+
+// A persisted config written before this fix contains null; loading it and
+// marshaling it again must still produce an array.
+func TestScheduleRoundTripFromNull(t *testing.T) {
+	var s ProcessingSchedule
+	if err := json.Unmarshal([]byte(`{"enabled":true,"allowedDays":null}`), &s); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if s.AllowedDays != nil {
+		t.Fatal("precondition: unmarshaling null should leave the slice nil")
+	}
+
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"allowedDays":[]`) {
+		t.Errorf("a stale null config must still serialise as an array, got: %s", data)
 	}
 }

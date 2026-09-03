@@ -8,6 +8,7 @@ import Search from './components/Search';
 import Settings from './components/Settings';
 import Login from './components/Login';
 import SetupWizard from './components/SetupWizard';
+import ErrorBoundary from './components/ErrorBoundary';
 import type { Job, SystemConfig, ScannerConfig, SystemStats, DashboardStats } from './types';
 
 function App() {
@@ -358,35 +359,45 @@ function App() {
 
       <main className="main-content">
         {currentView === 'dashboard' && (
-          <Dashboard jobs={jobs} config={config} stats={stats} dashboardStats={dashboardStats} />
+          <ErrorBoundary label="Dashboard">
+            <Dashboard jobs={jobs} config={config} stats={stats} dashboardStats={dashboardStats} />
+          </ErrorBoundary>
         )}
         {currentView === 'jobs' && (
-          <JobList
-            jobs={jobs}
-            onCreateJob={createJob}
-            onCancelJob={cancelJob}
-            onRetryJob={retryJob}
-            onClearFailed={clearFailedJobs}
-            subtitleMode={config?.subtitleMode}
-            sourceDir={config?.sourceDir}
-            destDir={config?.destDir}
-          />
+          <ErrorBoundary label="Jobs">
+            <JobList
+              jobs={jobs}
+              onCreateJob={createJob}
+              onCancelJob={cancelJob}
+              onRetryJob={retryJob}
+              onClearFailed={clearFailedJobs}
+              subtitleMode={config?.subtitleMode}
+              sourceDir={config?.sourceDir}
+              destDir={config?.destDir}
+            />
+          </ErrorBoundary>
         )}
         {currentView === 'scanner' && scannerConfig && (
-          <ScannerConfigComponent
-            config={scannerConfig}
-            onSave={updateScannerConfig}
-          />
+          <ErrorBoundary label="Scanner">
+            <ScannerConfigComponent
+              config={scannerConfig}
+              onSave={updateScannerConfig}
+            />
+          </ErrorBoundary>
         )}
         {currentView === 'search' && (
-          <Search authFetch={authFetch} />
+          <ErrorBoundary label="Search">
+            <Search authFetch={authFetch} />
+          </ErrorBoundary>
         )}
         {currentView === 'settings' && (
-          <Settings
-            config={config}
-            onConfigUpdate={updateSystemConfig}
-            token={token}
-          />
+          <ErrorBoundary label="Settings">
+            <Settings
+              config={config}
+              onConfigUpdate={updateSystemConfig}
+              token={token}
+            />
+          </ErrorBoundary>
         )}
       </main>
     </div>
