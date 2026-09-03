@@ -109,9 +109,16 @@ type Config struct {
 	// State
 	IsPremium     bool `json:"-"`
 	IsInitialized bool `json:"-"`
+
+	// lastMerge records how the environment and the persisted file were
+	// reconciled at load time, for diagnostics.
+	lastMerge *merger `json:"-"`
 }
 
-const ConfigFile = "/data/config.json"
+// ConfigFile is the persisted settings path. Overridable via CONFIG_FILE, for
+// consistency with JOBS_FILE and SCANNER_CONFIG_FILE, and so tests can point it
+// somewhere writable.
+var ConfigFile = getEnv("CONFIG_FILE", "/data/config.json")
 
 func Load() *Config {
 	// Default values
@@ -140,6 +147,8 @@ func Load() *Config {
 		SubtitleAPIKey:       getEnv("SUBTITLE_API_KEY", ""),
 		SubtitleUsername:     getEnv("SUBTITLE_USERNAME", ""),
 		SubtitlePassword:     getEnv("SUBTITLE_PASSWORD", ""),
+		VerifyOutput:         getEnvBool("VERIFY_OUTPUT", false),
+		DeleteSource:         getEnvBool("DELETE_SOURCE", false),
 		AutoConvertISO:       getEnvBool("AUTO_CONVERT_ISO", false),
 		ReplaceInPlace:       getEnvBool("REPLACE_IN_PLACE", false),
 		HoldingDir:           getEnv("HOLDING_DIR", ""),
@@ -151,9 +160,9 @@ func Load() *Config {
 		cfg.GPUVendor = system.DetectGPU()
 	}
 
-	// Override with values from disk if available
+	// Override with values from disk where the environment did not speak.
 	if err := cfg.loadFromDisk(); err != nil && !os.IsNotExist(err) {
-		// Log error but continue
+		log.Printf("[Config] Warning: could not read %s: %v — using environment and defaults", ConfigFile, err)
 	}
 
 	cfg.IsPremium = license.Validate(cfg.LicenseKey)
@@ -173,12 +182,11 @@ func (c *Config) loadFromDisk() error {
 		return err
 	}
 
-	// Detect which boolean keys are actually present in the JSON so we can
-	// distinguish an explicit false from a missing field (Go zero-value for bool).
-	// Without this, an old config.json without a key would silently override env vars.
+	// Which keys are actually present in the JSON. Needed to tell an explicit
+	// false or 0 from a missing field, since both unmarshal to the zero value.
 	var rawFields map[string]json.RawMessage
 	_ = json.Unmarshal(data, &rawFields)
-	hasBool := func(key string) bool {
+	present := func(key string) bool {
 		_, ok := rawFields[key]
 		return ok
 	}
@@ -190,113 +198,59 @@ func (c *Config) loadFromDisk() error {
 		log.Printf("[Config] Warning: config file schema version %d is older than current version %d. Some defaults may apply.", importJSON.SchemaVersion, currentSchemaVersion)
 	}
 
-	// Apply overrides
-	// Note: Strings will be overwritten if they are empty in JSON? No, Unmarshal does that.
-	// But if we generated the JSON from this struct, it has all fields.
-	// Let's assume the JSON contains the user's preferred state.
+	// The environment has already populated c. Anything it explicitly set wins
+	// over the file, and every disagreement is recorded.
+	m := &merger{}
 
-	if importJSON.Port != "" {
-		c.Port = importJSON.Port
-	}
-	if importJSON.SourceDir != "" {
-		c.SourceDir = importJSON.SourceDir
-	}
-	if importJSON.DestDir != "" {
-		c.DestDir = importJSON.DestDir
-	}
-	if importJSON.GPUVendor != "" && importJSON.GPUVendor != "cpu" && importJSON.GPUVendor != "auto" {
-		// Only use saved GPU if it's an explicit choice (nvidia, intel, amd)
-		c.GPUVendor = importJSON.GPUVendor
-	}
-	// If saved config was cpu/auto, we keep the auto-detected value from runtime
-	if importJSON.QualityPreset != "" {
-		c.QualityPreset = importJSON.QualityPreset
-	}
-	if importJSON.CRF != 0 {
-		c.CRF = importJSON.CRF
-	}
-	if importJSON.MaxConcurrentJobs != 0 {
-		c.MaxConcurrentJobs = importJSON.MaxConcurrentJobs
+	m.str(&c.Port, importJSON.Port, "PORT", "port")
+	m.str(&c.SourceDir, importJSON.SourceDir, "SOURCE_DIR", "sourceDir")
+	m.str(&c.DestDir, importJSON.DestDir, "DEST_DIR", "destDir")
+
+	// GPU keeps its special case: "cpu" and "auto" on disk are not explicit
+	// choices, so runtime detection stays in effect.
+	if importJSON.GPUVendor != "cpu" && importJSON.GPUVendor != "auto" {
+		m.str(&c.GPUVendor, importJSON.GPUVendor, "GPU_VENDOR", "gpuVendor")
 	}
 
-	if importJSON.AIProvider != "" {
-		c.AIProvider = importJSON.AIProvider
-	}
-	if importJSON.AIApiKey != "" {
-		c.AIApiKey = importJSON.AIApiKey
-	}
-	if importJSON.AIEndpoint != "" {
-		c.AIEndpoint = importJSON.AIEndpoint
-	}
-	if importJSON.AIModel != "" {
-		c.AIModel = importJSON.AIModel
-	}
+	m.str(&c.QualityPreset, importJSON.QualityPreset, "QUALITY_PRESET", "qualityPreset")
+	m.integer(&c.CRF, importJSON.CRF, present("crf"), "CRF", "crf")
+	m.integer(&c.MaxConcurrentJobs, importJSON.MaxConcurrentJobs, present("maxConcurrentJobs"), "MAX_CONCURRENT_JOBS", "maxConcurrentJobs")
 
-	if importJSON.AdminPassword != "" {
-		c.AdminPassword = importJSON.AdminPassword
-	}
-	if importJSON.LicenseKey != "" {
-		c.LicenseKey = importJSON.LicenseKey
-	}
+	m.str(&c.AIProvider, importJSON.AIProvider, "AI_PROVIDER", "aiProvider")
+	m.str(&c.AIApiKey, importJSON.AIApiKey, "AI_API_KEY", "aiApiKey")
+	m.str(&c.AIEndpoint, importJSON.AIEndpoint, "AI_ENDPOINT", "aiEndpoint")
+	m.str(&c.AIModel, importJSON.AIModel, "AI_MODEL", "aiModel")
 
-	// Scanner
-	if hasBool("scannerEnabled") {
-		c.ScannerEnabled = importJSON.ScannerEnabled
-	}
-	if importJSON.ScannerMode != "" {
-		c.ScannerMode = importJSON.ScannerMode
-	}
-	if importJSON.ScannerIntervalSec != 0 {
-		c.ScannerIntervalSec = importJSON.ScannerIntervalSec
-	}
-	if hasBool("scannerAutoCreate") {
-		c.ScannerAutoCreate = importJSON.ScannerAutoCreate
-	}
-	if importJSON.ScannerProcessedFile != "" {
-		c.ScannerProcessedFile = importJSON.ScannerProcessedFile
-	}
+	m.str(&c.AdminPassword, importJSON.AdminPassword, "ADMIN_PASSWORD", "adminPassword")
+	m.str(&c.LicenseKey, importJSON.LicenseKey, "LICENSE_KEY", "licenseKey")
 
-	if hasBool("verifyOutput") {
-		c.VerifyOutput = importJSON.VerifyOutput
-	}
-	if hasBool("deleteSource") {
-		c.DeleteSource = importJSON.DeleteSource
-	}
-	if hasBool("autoConvertISO") {
-		c.AutoConvertISO = importJSON.AutoConvertISO
-	}
-	if hasBool("replaceInPlace") {
-		c.ReplaceInPlace = importJSON.ReplaceInPlace
-	}
-	if importJSON.HoldingDir != "" {
-		c.HoldingDir = importJSON.HoldingDir
-	}
-	if _, ok := rawFields["puid"]; ok {
-		c.PUID = importJSON.PUID
-	}
-	if _, ok := rawFields["pgid"]; ok {
-		c.PGID = importJSON.PGID
-	}
+	m.boolean(&c.ScannerEnabled, importJSON.ScannerEnabled, present("scannerEnabled"), "SCANNER_ENABLED", "scannerEnabled")
+	m.str(&c.ScannerMode, importJSON.ScannerMode, "SCANNER_MODE", "scannerMode")
+	m.integer(&c.ScannerIntervalSec, importJSON.ScannerIntervalSec, present("scannerIntervalSec"), "SCANNER_INTERVAL_SEC", "scannerIntervalSec")
+	m.boolean(&c.ScannerAutoCreate, importJSON.ScannerAutoCreate, present("scannerAutoCreate"), "SCANNER_AUTO_CREATE", "scannerAutoCreate")
+	m.str(&c.ScannerProcessedFile, importJSON.ScannerProcessedFile, "SCANNER_PROCESSED_FILE", "scannerProcessedFile")
 
-	if importJSON.SubtitleMode != "" {
-		c.SubtitleMode = importJSON.SubtitleMode
-	}
-	if importJSON.SubtitleLang != "" {
-		c.SubtitleLang = importJSON.SubtitleLang
-	}
-	if importJSON.SubtitleAPIKey != "" {
-		c.SubtitleAPIKey = importJSON.SubtitleAPIKey
-	}
-	if importJSON.SubtitleUsername != "" {
-		c.SubtitleUsername = importJSON.SubtitleUsername
-	}
-	if importJSON.SubtitlePassword != "" {
-		c.SubtitlePassword = importJSON.SubtitlePassword
-	}
+	m.boolean(&c.VerifyOutput, importJSON.VerifyOutput, present("verifyOutput"), "VERIFY_OUTPUT", "verifyOutput")
+	m.boolean(&c.DeleteSource, importJSON.DeleteSource, present("deleteSource"), "DELETE_SOURCE", "deleteSource")
+	m.boolean(&c.AutoConvertISO, importJSON.AutoConvertISO, present("autoConvertISO"), "AUTO_CONVERT_ISO", "autoConvertISO")
 
-	if _, ok := rawFields["schedule"]; ok {
+	m.boolean(&c.ReplaceInPlace, importJSON.ReplaceInPlace, present("replaceInPlace"), "REPLACE_IN_PLACE", "replaceInPlace")
+	m.str(&c.HoldingDir, importJSON.HoldingDir, "HOLDING_DIR", "holdingDir")
+	m.integer(&c.PUID, importJSON.PUID, present("puid"), "PUID", "puid")
+	m.integer(&c.PGID, importJSON.PGID, present("pgid"), "PGID", "pgid")
+
+	m.str(&c.SubtitleMode, importJSON.SubtitleMode, "SUBTITLE_MODE", "subtitleMode")
+	m.str(&c.SubtitleLang, importJSON.SubtitleLang, "SUBTITLE_LANG", "subtitleLang")
+	m.str(&c.SubtitleAPIKey, importJSON.SubtitleAPIKey, "SUBTITLE_API_KEY", "subtitleApiKey")
+	m.str(&c.SubtitleUsername, importJSON.SubtitleUsername, "SUBTITLE_USERNAME", "subtitleUsername")
+	m.str(&c.SubtitlePassword, importJSON.SubtitlePassword, "SUBTITLE_PASSWORD", "subtitlePassword")
+
+	if present("schedule") {
 		c.Schedule = importJSON.Schedule
 	}
+
+	m.report()
+	c.lastMerge = m
 
 	return nil
 }
