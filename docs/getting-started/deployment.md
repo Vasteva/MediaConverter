@@ -1,5 +1,41 @@
 # Vastiva Media Converter - Deployment Guide
 
+
+## Deployment settings (GitHub repository variables)
+
+The deploy workflow reads three repository variables (Settings → Secrets and
+variables → Actions → Variables). All are optional.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DEPLOY_PATH` | `/opt/vastiva` | Directory holding the compose stack on the self-hosted runner. Set this when Vastiva runs inside an existing stack rather than a standalone install. |
+| `DEPLOY_SERVICE` | `vastiva` | Compose service name. Every deploy command is scoped to it, so other services in the same file are never stopped. |
+| `AUTO_DEPLOY` | unset (off) | Set to `true` to deploy automatically on every merge to `main`. |
+
+### Why automatic deployment is off by default
+
+Deploying restarts the container, which kills any transcode in flight. A 2160p
+REMUX can be hours of work, and on restart the job returns to `pending` and
+begins again from zero — so a merge landing mid-transcode silently costs an
+evening of encoding.
+
+Push to `main` builds and publishes the image either way. To ship it, run the
+**Deploy to Production** workflow manually when the queue is idle:
+
+```bash
+gh workflow run "Deploy to Production"
+```
+
+Set `AUTO_DEPLOY=true` only if unattended restarts are acceptable for your queue.
+
+### Running alongside other services
+
+If the compose file also runs Jellyfin or anything else, set `DEPLOY_PATH` to
+that directory and leave `DEPLOY_SERVICE` as `vastiva`. The workflow uses
+`docker compose pull vastiva` and `docker compose up -d vastiva`, never
+`docker compose down`, so nothing else in the stack is touched.
+
+
 ## Overview
 This guide covers deploying Vastiva Media Converter to your production server using GitHub Actions and Docker.
 
