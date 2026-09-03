@@ -263,6 +263,20 @@ function App() {
     }
   }, [authFetch, fetchJobs]);
 
+  // Cancel every pending or processing job. Returns how many were cancelled.
+  const cancelAllJobs = useCallback(async () => {
+    try {
+      const response = await authFetch('/api/jobs/cancel-all', { method: 'POST' });
+      if (!response.ok) return 0;
+      const { cancelled } = await response.json();
+      await fetchJobs();
+      return cancelled ?? 0;
+    } catch (error) {
+      console.error('Failed to cancel all jobs:', error);
+      return 0;
+    }
+  }, [authFetch, fetchJobs]);
+
   // Retry job
   const retryJob = useCallback(async (jobId: string) => {
     try {
@@ -371,6 +385,7 @@ function App() {
               onCancelJob={cancelJob}
               onRetryJob={retryJob}
               onClearFailed={clearFailedJobs}
+              onCancelAll={cancelAllJobs}
               subtitleMode={config?.subtitleMode}
               sourceDir={config?.sourceDir}
               destDir={config?.destDir}
