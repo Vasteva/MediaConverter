@@ -1,6 +1,7 @@
 package meta
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -177,5 +178,105 @@ func TestExtractCRFRejectsUnusableValues(t *testing.T) {
 func TestExtractCRFReturnsZeroOnFailure(t *testing.T) {
 	if got, _ := ExtractCRF("no number here"); got != 0 {
 		t.Errorf("failed parse returned %d, want 0 so the caller uses its own default", got)
+	}
+}
+
+// stubProvider returns a canned response, so the fallback path can be exercised
+// without a live model.
+type stubProvider struct {
+	response string
+	called   bool
+}
+
+func (s *stubProvider) Analyze(_ context.Context, _ string) (string, error) {
+	s.called = true
+	return s.response, nil
+}
+func (s *stubProvider) Transcribe(_ context.Context, _ string) (string, error) { return "", nil }
+func (s *stubProvider) VerifyMedia(_ context.Context, _, _ []string) (bool, error) {
+	return true, nil
+}
+func (s *stubProvider) GetName() string { return "stub" }
+
+// TestCleanFilenamePrefersParser is the fix for the reported bug. A model turned
+// "28.Days.Later.2002..." into "Days Later"; the parser cannot drop a token, and
+// it now runs first — so the model is never consulted for a name like this.
+func TestCleanFilenamePrefersParser(t *testing.T) {
+	provider := &stubProvider{response: "Days Later"}
+	cleaner := NewCleaner(provider)
+
+	title, source, err := cleaner.CleanFilename(context.Background(),
+		"28.Days.Later.2002.REPACK.BluRay.1080p.DTS-HD.MA.5.1.AVC.HYBRID.REMUX-FraMeSToR.mkv")
+	if err != nil {
+		t.Fatalf("CleanFilename: %v", err)
+	}
+	if title != "28 Days Later (2002)" {
+		t.Errorf("title = %q, want %q", title, "28 Days Later (2002)")
+	}
+	if source != SourceParser {
+		t.Errorf("source = %q, want %q", source, SourceParser)
+	}
+	if provider.called {
+		t.Error("the model was consulted for a filename the parser handles")
+	}
+}
+
+// A name the parser cannot read still reaches the model.
+func TestCleanFilenameFallsBackToModel(t *testing.T) {
+	provider := &stubProvider{response: "Some Obscure Film (1974)"}
+	cleaner := NewCleaner(provider)
+
+	_, source, err := cleaner.CleanFilename(context.Background(), "1080p.BluRay.x264-GROUP.mkv")
+	if err == nil && source != SourceModel {
+		t.Errorf("source = %q, want the model to be consulted", source)
+	}
+	if !provider.called {
+		t.Error("the model should be consulted when the parser finds no title")
+	}
+}
+
+// Without a provider, an unparseable name is an error rather than a bad guess.
+func TestCleanFilenameNoProviderNoParse(t *testing.T) {
+	cleaner := NewCleaner(nil)
+	if _, _, err := cleaner.CleanFilename(context.Background(), "1080p.BluRay.x264-GROUP.mkv"); err == nil {
+		t.Error("expected an error when nothing can name the file")
+	}
+}
+
+// The parser still works with no provider at all — most renames need no model.
+func TestCleanFilenameParserWorksWithoutProvider(t *testing.T) {
+	cleaner := NewCleaner(nil)
+	title, source, err := cleaner.CleanFilename(context.Background(), "Aliens.1986.1080p.BluRay.x264.mkv")
+	if err != nil {
+		t.Fatalf("CleanFilename: %v", err)
+	}
+	if title != "Aliens (1986)" || source != SourceParser {
+		t.Errorf("got %q via %q, want %q via %q", title, source, "Aliens (1986)", SourceParser)
+	}
+}
+
+func TestCheckTitleAgainstSource(t *testing.T) {
+	cases := []struct {
+		name      string
+		title     string
+		filename  string
+		wantError bool
+	}{
+		{"exact match", "Aliens", "Aliens.1986.1080p.mkv", false},
+		{"case differs", "aliens", "ALIENS.1986.mkv", false},
+		{"partial expansion is allowed", "Star Wars A New Hope", "Star.Wars.New.Hope.mkv", false},
+		{"unrelated title rejected", "The Godfather", "Aliens.1986.1080p.BluRay.mkv", true},
+		{"hallucinated entirely", "Some Film Nobody Made", "Aliens.1986.mkv", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkTitleAgainstSource(tc.title, tc.filename)
+			if tc.wantError && err == nil {
+				t.Errorf("expected %q to be rejected for %q", tc.title, tc.filename)
+			}
+			if !tc.wantError && err != nil {
+				t.Errorf("expected %q to be accepted for %q, got %v", tc.title, tc.filename, err)
+			}
+		})
 	}
 }
