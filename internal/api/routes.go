@@ -355,6 +355,16 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		return c.JSON(job)
 	})
 
+	// Cancel every pending or processing job. Distinct from DELETE /api/jobs,
+	// which purges records by status — this stops work and leaves the history.
+	api.Post("/jobs/cancel-all", func(c *fiber.Ctx) error {
+		if jm == nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Job manager not initialized"})
+		}
+		count := jm.CancelAllActive()
+		return c.JSON(fiber.Map{"cancelled": count})
+	})
+
 	api.Delete("/jobs", func(c *fiber.Ctx) error {
 		if jm == nil {
 			return c.Status(500).JSON(fiber.Map{"error": "Job manager not initialized"})

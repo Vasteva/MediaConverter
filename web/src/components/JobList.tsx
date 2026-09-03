@@ -8,6 +8,7 @@ interface JobListProps {
     onCancelJob: (jobId: string) => Promise<boolean>;
     onRetryJob: (jobId: string) => Promise<boolean>;
     onClearFailed?: () => Promise<boolean>;
+    onCancelAll?: () => Promise<number>;
     subtitleMode?: 'always' | 'selective' | 'never';
     sourceDir?: string;
     destDir?: string;
@@ -25,12 +26,13 @@ function formatBytes(bytes: number): string {
     return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
 }
 
-export default function JobList({ jobs, onCreateJob, onCancelJob, onRetryJob, onClearFailed, subtitleMode = 'selective', sourceDir, destDir }: JobListProps) {
+export default function JobList({ jobs, onCreateJob, onCancelJob, onRetryJob, onClearFailed, onCancelAll, subtitleMode = 'selective', sourceDir, destDir }: JobListProps) {
     const [filter, setFilter] = useState<FilterType>('all');
     const [search, setSearch] = useState('');
     const [sortField, setSortField] = useState<SortField>('createdAt');
     const [sortDir, setSortDir] = useState<SortDir>('desc');
     const [isClearing, setIsClearing] = useState(false);
+    const [isCancellingAll, setIsCancellingAll] = useState(false);
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
 
@@ -52,6 +54,24 @@ export default function JobList({ jobs, onCreateJob, onCancelJob, onRetryJob, on
     };
 
     const failedCount = useMemo(() => jobs.filter(j => ['failed', 'cancelled'].includes(j.status)).length, [jobs]);
+    const activeCount = useMemo(() => jobs.filter(j => ['pending', 'processing'].includes(j.status)).length, [jobs]);
+
+    const handleCancelAll = async () => {
+        if (!onCancelAll) return;
+        // Cancelling stops in-flight transcodes, discarding hours of work in
+        // some cases, so this asks first. Clear Failed only removes records and
+        // deliberately does not.
+        const plural = activeCount === 1 ? 'job' : 'jobs';
+        if (!window.confirm(
+            `Cancel ${activeCount} active ${plural}?\n\n` +
+            `Any transcode currently running will be stopped and its partial output discarded. ` +
+            `Completed and failed jobs are not affected.`
+        )) return;
+
+        setIsCancellingAll(true);
+        await onCancelAll();
+        setIsCancellingAll(false);
+    };
 
     const handleClearFailed = async () => {
         if (!onClearFailed) return;
@@ -186,6 +206,18 @@ export default function JobList({ jobs, onCreateJob, onCancelJob, onRetryJob, on
                         </button>
                     ))}
                 </div>
+
+                {/* Cancel All — stops work; distinct from Clear Failed, which removes records */}
+                {onCancelAll && activeCount > 0 && (
+                    <button
+                        className="btn btn-danger"
+                        onClick={handleCancelAll}
+                        disabled={isCancellingAll}
+                        title="Stop every pending and running job"
+                    >
+                        {isCancellingAll ? 'Cancelling...' : `Cancel All (${activeCount})`}
+                    </button>
+                )}
 
                 {/* Clear Failed */}
                 {onClearFailed && failedCount > 0 && (

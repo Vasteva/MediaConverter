@@ -329,6 +329,55 @@ func (m *Manager) CancelJob(id string) bool {
 	return true
 }
 
+// CancelAllActive cancels every job that is pending or processing, and returns
+// how many were cancelled.
+//
+// Completed, failed and already-cancelled jobs are left alone: this stops work,
+// it does not clear history. That is what PurgeJobs is for.
+func (m *Manager) CancelAllActive() int {
+	// Snapshot under the manager lock, then take job locks outside it. Holding
+	// both at once would invert the ordering used elsewhere, and Save must never
+	// be called while a manager lock is held.
+	m.mu.RLock()
+	candidates := make([]*Job, 0, len(m.jobs))
+	for _, job := range m.jobs {
+		candidates = append(candidates, job)
+	}
+	m.mu.RUnlock()
+
+	cancelled := make([]*Job, 0, len(candidates))
+	for _, job := range candidates {
+		job.mu.Lock()
+		if job.Status != StatusPending && job.Status != StatusProcessing {
+			job.mu.Unlock()
+			continue
+		}
+		if job.cancel != nil {
+			job.cancel() // kills the FFmpeg subprocess for in-flight jobs
+		}
+		job.Status = StatusCancelled
+		job.mu.Unlock()
+		cancelled = append(cancelled, job)
+	}
+
+	if len(cancelled) == 0 {
+		return 0
+	}
+
+	// One save for the batch rather than one per job — cancelling a full queue
+	// would otherwise rewrite the entire jobs file once per entry.
+	m.Save()
+
+	if m.OnJobUpdate != nil {
+		for _, job := range cancelled {
+			m.OnJobUpdate(job)
+		}
+	}
+
+	log.Printf("Cancelled %d active job(s)", len(cancelled))
+	return len(cancelled)
+}
+
 // GetStatus returns the job's current status under its lock.
 //
 // Status is written by the worker goroutine throughout a transcode, so reading
@@ -410,6 +459,18 @@ func (m *Manager) appendAILog(job *Job, entry AILog) {
 
 func (m *Manager) processJob(job *Job) {
 	job.mu.Lock()
+
+	// A cancelled job stays in the priority queue — CancelJob marks it but has
+	// no way to remove it from the heap. Without this check the worker pops it
+	// and overwrites the status straight back to processing, so cancelling
+	// anything still queued did nothing at all: the job ran, and the UI showed
+	// it flip from cancelled back to processing.
+	if job.Status == StatusCancelled {
+		job.mu.Unlock()
+		log.Printf("[Job %s] Skipping — cancelled before it started", job.ID)
+		return
+	}
+
 	job.ctx, job.cancel = context.WithCancel(context.Background())
 	job.Status = StatusProcessing
 	job.StartedAt = time.Now()

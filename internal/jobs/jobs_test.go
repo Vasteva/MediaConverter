@@ -285,3 +285,119 @@ func TestMarshalJSONPreservesFields(t *testing.T) {
 			back.ID, back.Status, back.Progress)
 	}
 }
+
+// TestCancelledJobIsNotProcessed covers the defect that made cancelling a
+// queued job a no-op.
+//
+// CancelJob marks the job but cannot remove it from the priority heap. Without
+// a check in processJob the worker popped it and overwrote the status straight
+// back to processing, so the job ran anyway and the UI showed it flip from
+// cancelled back to processing.
+func TestCancelledJobIsNotProcessed(t *testing.T) {
+	mgr, err := NewManager(&config.Config{MaxConcurrentJobs: 1}, nil, "")
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	job := &Job{ID: "cancelled-before-start", Type: JobTypeTest, Status: StatusPending}
+	mgr.AddJob(job)
+
+	if !mgr.CancelJob(job.ID) {
+		t.Fatal("CancelJob returned false")
+	}
+
+	// Start workers only now, so the job is guaranteed to be cancelled before
+	// any worker can pop it.
+	mgr.Start()
+	defer mgr.Stop()
+	time.Sleep(300 * time.Millisecond)
+
+	if got := job.GetStatus(); got != StatusCancelled {
+		t.Errorf("status = %s, want it to stay %s — the worker processed a cancelled job",
+			got, StatusCancelled)
+	}
+	job.mu.RLock()
+	started := job.StartedAt
+	job.mu.RUnlock()
+	if !started.IsZero() {
+		t.Error("StartedAt was set, so processJob ran on a cancelled job")
+	}
+}
+
+func TestCancelAllActive(t *testing.T) {
+	mgr, err := NewManager(&config.Config{MaxConcurrentJobs: 1}, nil, "")
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	mgr.AddJob(&Job{ID: "pending-1", Type: JobTypeTest, Status: StatusPending})
+	mgr.AddJob(&Job{ID: "pending-2", Type: JobTypeTest, Status: StatusPending})
+	mgr.AddJob(&Job{ID: "processing-1", Type: JobTypeTest, Status: StatusProcessing})
+	mgr.AddJob(&Job{ID: "completed-1", Type: JobTypeTest, Status: StatusCompleted})
+	mgr.AddJob(&Job{ID: "failed-1", Type: JobTypeTest, Status: StatusFailed})
+
+	var cancelled int
+	mustNotBlock(t, 5*time.Second, "CancelAllActive", func() {
+		cancelled = mgr.CancelAllActive()
+	})
+
+	if cancelled != 3 {
+		t.Errorf("cancelled %d, want 3 (two pending, one processing)", cancelled)
+	}
+
+	// History must be left intact — this stops work, it does not clear records.
+	for id, want := range map[string]Status{
+		"pending-1":    StatusCancelled,
+		"pending-2":    StatusCancelled,
+		"processing-1": StatusCancelled,
+		"completed-1":  StatusCompleted,
+		"failed-1":     StatusFailed,
+	} {
+		if got := mgr.GetJob(id).GetStatus(); got != want {
+			t.Errorf("%s: status = %s, want %s", id, got, want)
+		}
+	}
+
+	if n := len(mgr.GetAllJobs()); n != 5 {
+		t.Errorf("%d jobs remain, want all 5 — cancelling must not delete records", n)
+	}
+
+	// Calling it again with nothing active is a no-op.
+	if again := mgr.CancelAllActive(); again != 0 {
+		t.Errorf("second call cancelled %d, want 0", again)
+	}
+}
+
+// Cancelling in bulk must notify subscribers for each job, so the SSE stream
+// and the UI reflect every change rather than only the last.
+func TestCancelAllActiveNotifiesPerJob(t *testing.T) {
+	mgr, err := NewManager(&config.Config{MaxConcurrentJobs: 1}, nil, "")
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	var mu sync.Mutex
+	notified := map[string]int{}
+	mgr.OnJobUpdate = func(j *Job) {
+		mu.Lock()
+		notified[j.ID]++
+		mu.Unlock()
+	}
+
+	mgr.AddJob(&Job{ID: "a", Type: JobTypeTest, Status: StatusPending})
+	mgr.AddJob(&Job{ID: "b", Type: JobTypeTest, Status: StatusPending})
+
+	mu.Lock()
+	notified = map[string]int{} // discard the AddJob notifications
+	mu.Unlock()
+
+	mgr.CancelAllActive()
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, id := range []string{"a", "b"} {
+		if notified[id] == 0 {
+			t.Errorf("no update broadcast for job %s", id)
+		}
+	}
+}
