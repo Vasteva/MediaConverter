@@ -3,6 +3,8 @@ name: Deploy to Production
 on:
   push:
     branches: ["main"]
+  # Manual deploys are the default way to ship. See the deploy job for why.
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
@@ -43,22 +45,109 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
+  # Deploying restarts the container, which kills any transcode in flight. A
+  # 2160p REMUX can be hours of work, and on restart the job returns to pending
+  # and begins again from zero — so a merge landing mid-transcode silently costs
+  # an evening of encoding.
+  #
+  # Because of that, pushing to main does NOT deploy by default. Run this
+  # workflow manually when the queue is idle, or set the AUTO_DEPLOY repository
+  # variable to "true" to opt into deploying on every merge.
   deploy:
     runs-on: self-hosted
     needs: build-and-push
-    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: read
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' || vars.AUTO_DEPLOY == 'true')
+
+    env:
+      # Where the compose stack lives on the runner host.
+      #
+      # This was hardcoded to /opt/vastiva, the path deploy.sh creates for a
+      # standalone install. That is a reasonable default but not the only
+      # layout: running Vastiva inside an existing media stack alongside
+      # Jellyfin puts the compose file somewhere else entirely, and the
+      # hardcoded `cd` then failed on every deploy. Set the DEPLOY_PATH
+      # repository variable when the stack is not at the default.
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/vastiva' }}
+      # Only this service is touched. The same compose file may also run
+      # Jellyfin and other services.
+      SERVICE: ${{ vars.DEPLOY_SERVICE || 'vastiva' }}
 
     steps:
-      - name: Deploy to Local Server
+      - name: Deploy to local server
         env:
           REGISTRY: ghcr.io
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -f "$DEPLOY_PATH/docker-compose.yml" ] && [ ! -f "$DEPLOY_PATH/compose.yml" ]; then
+            echo "::error::No compose file found in $DEPLOY_PATH."
+            echo "::error::Set the DEPLOY_PATH repository variable to the directory holding the stack."
+            exit 1
+          fi
+          cd "$DEPLOY_PATH"
+
+          echo "$GH_TOKEN" | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
+
+          # Scoped to one service throughout. The previous version ran
+          # `docker compose down`, which stops every service in the file — so a
+          # Vastiva deploy took Jellyfin down mid-playback.
+          echo "Pulling $SERVICE..."
+          docker compose pull "$SERVICE"
+
+          echo "Restarting $SERVICE..."
+          docker compose up -d "$SERVICE"
+
+      - name: Verify the container is healthy
+        run: |
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+
+          # `docker compose up -d` returning zero only means the container was
+          # created. A container that starts and immediately crash-loops still
+          # exits zero here, so the deploy would report success while the service
+          # was down. The compose file defines a healthcheck; wait for it.
+          CID="$(docker compose ps -q "$SERVICE")"
+          if [ -z "$CID" ]; then
+            echo "::error::$SERVICE has no container after deploy"
+            exit 1
+          fi
+
+          for _ in $(seq 1 36); do
+            STATUS="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$CID")"
+            case "$STATUS" in
+              healthy)
+                echo "$SERVICE is healthy"
+                exit 0
+                ;;
+              none)
+                # No healthcheck defined; fall back to the running state.
+                if [ "$(docker inspect -f '{{.State.Running}}' "$CID")" = "true" ]; then
+                  echo "$SERVICE is running (no healthcheck defined)"
+                  exit 0
+                fi
+                ;;
+            esac
+            sleep 5
+          done
+
+          echo "::error::$SERVICE did not become healthy within 180s"
+          docker compose logs --tail 80 "$SERVICE"
+          exit 1
+
+      - name: Remove images this deploy orphaned
+        if: always()
+        env:
           IMAGE_NAME: ${{ github.repository }}
         run: |
-          cd /opt/vastiva
-          REPO_LOWER=$(echo "${REGISTRY}/${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker pull $REPO_LOWER:latest
-          docker compose down
-          docker compose up -d
-          docker image prune -f
-          echo "Deployment complete! Application running on port 8091"
+          set -euo pipefail
+          # Filtered to images built from this repository. The previous bare
+          # `docker image prune -f` swept every dangling image on a host that
+          # also runs other stacks.
+          docker image prune -f \
+            --filter "label=org.opencontainers.image.source=https://github.com/${IMAGE_NAME}" || true
