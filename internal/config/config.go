@@ -22,6 +22,25 @@ type ProcessingSchedule struct {
 	Timezone    string `json:"timezone"`    // IANA e.g. "America/New_York"
 }
 
+// MarshalJSON always emits AllowedDays as an array, never null.
+//
+// A nil slice marshals to JSON null, and the zero value of this struct is the
+// normal case — any config that has never had a schedule set. The settings UI
+// reads the field directly (schedule.allowedDays.includes(...)), so null threw
+// a TypeError the moment the schedule checkbox was ticked and the day picker
+// rendered, unmounting the whole settings page.
+//
+// Guaranteeing the shape here rather than at the handler means every consumer
+// gets it, including the config written to disk.
+func (s ProcessingSchedule) MarshalJSON() ([]byte, error) {
+	// The local type sheds this method so the nested Marshal does not recurse.
+	type scheduleFields ProcessingSchedule
+	if s.AllowedDays == nil {
+		s.AllowedDays = []int{}
+	}
+	return json.Marshal(scheduleFields(s))
+}
+
 type Config struct {
 	SchemaVersion int `json:"schemaVersion"`
 

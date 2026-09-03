@@ -84,7 +84,20 @@ export default function Settings({ config: initialConfig, onConfigUpdate, token 
     const isPremium = config.isPremium;
 
     const defaultSchedule: ProcessingSchedule = { enabled: false, startHour: 22, endHour: 6, allowedDays: [], timezone: 'UTC' };
-    const schedule: ProcessingSchedule = config.schedule ?? defaultSchedule;
+
+    // `config.schedule ?? defaultSchedule` is not enough on its own. The API
+    // returns a schedule *object* whose fields may be missing or null — a Go nil
+    // slice serialises to null — so the ?? never fires and allowedDays arrives as
+    // null. Calling .includes() on it threw and unmounted the page.
+    //
+    // The server now guarantees an array, but a config persisted before that fix
+    // can still be loaded, so each field is defaulted individually here too.
+    const raw = config.schedule ?? defaultSchedule;
+    const schedule: ProcessingSchedule = {
+        ...defaultSchedule,
+        ...raw,
+        allowedDays: raw.allowedDays ?? [],
+    };
     const setSchedule = (s: ProcessingSchedule) => setConfig({ ...config, schedule: s });
 
     return (
