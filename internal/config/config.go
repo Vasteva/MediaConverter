@@ -88,6 +88,13 @@ type Config struct {
 	DeleteSource   bool `json:"deleteSource"`   // Default: false
 	AutoConvertISO bool `json:"autoConvertISO"` // Default: false
 
+	// SavingsFloor is the minimum fraction (0.15 == 15%) an output must be
+	// smaller than its source to be kept; below it the output is discarded and
+	// the original retained. Not yet exposed on GET/POST /api/config or the
+	// settings UI — see #51, sequenced after the config mutex fix in #43 so
+	// this doesn't become one more field mutated without synchronisation.
+	SavingsFloor float64 `json:"savingsFloor"` // Default: 0.15
+
 	// Reintegration. With ReplaceInPlace the transcode is written beside its
 	// source and, once validated, takes the source's place in the library —
 	// so Jellyfin sees the optimised file without anything being moved by
@@ -150,6 +157,7 @@ func Load() *Config {
 		VerifyOutput:         getEnvBool("VERIFY_OUTPUT", false),
 		DeleteSource:         getEnvBool("DELETE_SOURCE", false),
 		AutoConvertISO:       getEnvBool("AUTO_CONVERT_ISO", false),
+		SavingsFloor:         getEnvFloat("SAVINGS_FLOOR", 0.15),
 		ReplaceInPlace:       getEnvBool("REPLACE_IN_PLACE", false),
 		HoldingDir:           getEnv("HOLDING_DIR", ""),
 		PUID:                 getEnvInt("PUID", -1),
@@ -233,6 +241,7 @@ func (c *Config) loadFromDisk() error {
 	m.boolean(&c.VerifyOutput, importJSON.VerifyOutput, present("verifyOutput"), "VERIFY_OUTPUT", "verifyOutput")
 	m.boolean(&c.DeleteSource, importJSON.DeleteSource, present("deleteSource"), "DELETE_SOURCE", "deleteSource")
 	m.boolean(&c.AutoConvertISO, importJSON.AutoConvertISO, present("autoConvertISO"), "AUTO_CONVERT_ISO", "autoConvertISO")
+	m.float(&c.SavingsFloor, importJSON.SavingsFloor, present("savingsFloor"), "SAVINGS_FLOOR", "savingsFloor")
 
 	m.boolean(&c.ReplaceInPlace, importJSON.ReplaceInPlace, present("replaceInPlace"), "REPLACE_IN_PLACE", "replaceInPlace")
 	m.str(&c.HoldingDir, importJSON.HoldingDir, "HOLDING_DIR", "holdingDir")
@@ -312,6 +321,15 @@ func getEnvBool(key string, fallback bool) bool {
 	if value := os.Getenv(key); value != "" {
 		if b, err := strconv.ParseBool(value); err == nil {
 			return b
+		}
+	}
+	return fallback
+}
+
+func getEnvFloat(key string, fallback float64) float64 {
+	if value := os.Getenv(key); value != "" {
+		if f, err := strconv.ParseFloat(value, 64); err == nil {
+			return f
 		}
 	}
 	return fallback

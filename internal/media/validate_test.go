@@ -82,6 +82,34 @@ func TestValidateOutputRejectsBrokenFiles(t *testing.T) {
 	})
 }
 
+// TestMeetsSavingsFloor covers the guard added for #38: a validated output
+// that isn't meaningfully smaller than its source is not worth keeping.
+func TestMeetsSavingsFloor(t *testing.T) {
+	cases := []struct {
+		name             string
+		srcSize, outSize int64
+		floor            float64
+		want             bool
+	}{
+		{"comfortably under the floor", 100_000, 50_000, 0.15, true},
+		{"exactly at the floor", 100_000, 85_000, 0.15, true},
+		{"just under the floor", 100_000, 85_001, 0.15, false},
+		{"output bigger than source", 100_000, 120_000, 0.15, false},
+		{"output equal to source", 100_000, 100_000, 0.15, false},
+		{"unknown source size passes", 0, 50_000, 0.15, true},
+		{"negative source size passes", -1, 50_000, 0.15, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := MeetsSavingsFloor(tc.srcSize, tc.outSize, tc.floor)
+			if got != tc.want {
+				t.Errorf("MeetsSavingsFloor(%d, %d, %.2f) = %v, want %v",
+					tc.srcSize, tc.outSize, tc.floor, got, tc.want)
+			}
+		})
+	}
+}
+
 func asValidationError(err error, target **OutputValidationError) bool {
 	v, ok := err.(*OutputValidationError)
 	if ok {

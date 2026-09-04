@@ -202,6 +202,25 @@ func (f *FFmpegWrapper) ValidateExtractedOutput(ctx context.Context, expectedDur
 	return nil
 }
 
+// MeetsSavingsFloor reports whether outSize is at least floor smaller than
+// srcSize, as a fraction (0.15 == 15%).
+//
+// ValidateOutput only catches outputs that are broken; it says nothing about
+// outputs that are simply not worth having. A transcode that comes out the
+// same size as its source, or bigger, is not an optimisation — replacing a
+// good file with a same-size or larger one is a regression a job should never
+// report as a success.
+//
+// srcSize <= 0 reports true: there is nothing to compare against, and that
+// case is for ValidateOutput's size checks to catch, not this one.
+func MeetsSavingsFloor(srcSize, outSize int64, floor float64) bool {
+	if srcSize <= 0 {
+		return true
+	}
+	savings := 1 - float64(outSize)/float64(srcSize)
+	return savings >= floor
+}
+
 // CheckSourceSupported reports whether a source can be transcoded correctly
 // with the current pipeline, returning a descriptive error when it cannot.
 //

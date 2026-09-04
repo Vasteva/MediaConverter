@@ -100,6 +100,21 @@ func (m *merger) boolean(dst *bool, fileValue, present bool, envKey, jsonKey str
 	*dst = fileValue
 }
 
+// float applies a file value to dst unless the environment set it.
+// present distinguishes an explicit 0 from an absent key.
+func (m *merger) float(dst *float64, fileValue float64, present bool, envKey, jsonKey string) {
+	if !present {
+		return
+	}
+	if envIsSet(envKey) {
+		if *dst != fileValue {
+			m.note(jsonKey, envKey, *dst, fileValue)
+		}
+		return
+	}
+	*dst = fileValue
+}
+
 // report writes a summary of every conflict to the log.
 //
 // Logged at startup, once, listing each field — a silent override is what made

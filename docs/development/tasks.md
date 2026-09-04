@@ -4,17 +4,17 @@
 
 ## 📋 Executive Summary
 
-Eighteen open issues, from a full source review on 2026-09-04 combined with findings
-from production testing on 2026-09-03. #35 closed the same day it was filed.
+Seventeen open issues, from a full source review on 2026-09-04 combined with findings
+from production testing on 2026-09-03. #35 and #38 closed the same day they were filed.
 
 The media pipeline itself — `internal/media` (ffmpeg, progress, validate) and
 `internal/ai/meta` — is in good shape and holds up under review. The open work is
 concentrated in two places:
 
-- **Nothing stops a job from making a file worse.** No skip-if-not-smaller guard,
-  no codec/bitrate filter, an AI CRF suggestion that cannot be switched off, and
-  a resolution filter that only applies to scanner jobs (#38–#42). Production
-  testing found real files inflated by re-encoding already-efficient HEVC.
+- **Nothing else stops a job from making a file worse.** No codec/bitrate
+  filter, an AI CRF suggestion that cannot be switched off, and a resolution
+  filter that only applies to scanner jobs (#39–#42). Production testing found
+  real files inflated by re-encoding already-efficient HEVC.
 - **Shared mutable state is unsynchronised.** `config.Config` has no mutex at all
   while the API mutates it under running workers (#43).
 
@@ -24,6 +24,38 @@ written 2026-02-27 and was not re-verified against the code before this review.
 ---
 
 ## ✅ Closed Today
+
+### 38. No Skip-If-Not-Smaller Guard
+
+- **Status:** ✅ Resolved (2026-09-04)
+- **File:** `internal/media/validate.go`; `internal/config/config.go`; `internal/config/precedence.go`; `internal/jobs/manager.go`
+- **Details:** `ValidateOutput` rejected outputs that were too *small* but
+  nothing rejected one larger than its source. A job could replace a file
+  with a bigger file and report success.
+- **Fix:**
+  - Added `media.MeetsSavingsFloor(srcSize, outSize, floor)` — pure size-ratio
+    check, no I/O, so it's unit-testable without ffmpeg.
+  - Added `Config.SavingsFloor` (default `0.15`, env `SAVINGS_FLOOR`,
+    persisted as `savingsFloor`), following the existing env-vs-file
+    precedence pattern (`merger.float`, mirroring `merger.integer`).
+  - `runOptimizationFromPath` now checks the gate immediately after
+    `ValidateOutput` passes. Below the floor: `discardOutput`, keep the
+    original source untouched, set a `StatusDetail` explaining the skip, and
+    return `(false, nil)` — the job completes successfully rather than
+    failing, and (for the ISO auto-extract path) the returned `false`
+    correctly withholds deletion of the original disc image too, the same
+    `verified` plumbing #35 fixed.
+  - **Not done:** `SavingsFloor` is not yet exposed on `GET`/`POST
+    /api/config` or the settings UI. #51 already lists it as one of the
+    fields that needs to land there, and its own sequencing note says to do
+    that after #43 (the config mutex) — adding another API-writable mutable
+    field before that fix just widens the race #43 describes. The field is
+    fully live via env var / `config.json` in the meantime.
+- **Tests:** `TestMeetsSavingsFloor` (table-driven: under/at/over the floor,
+  equal size, bigger output, unknown/negative source size). Full
+  `internal/media`, `internal/jobs`, `internal/config` suites re-run with
+  `-race -count=1`: all pass. `go vet ./internal/...` clean, `go build
+  ./internal/...` clean.
 
 ### 35. Source Deletion in `runExtraction` Was Not Gated on Validation
 
@@ -113,19 +145,6 @@ written 2026-02-27 and was not re-verified against the code before this review.
 ## 🟠 High — Output Quality
 
 *All five found during production testing, 2026-09-03.*
-
-### 38. No Skip-If-Not-Smaller Guard
-
-- **Status:** 🟠 Open
-- **File:** `internal/media/validate.go`; `internal/jobs/manager.go`
-- **Details:** `ValidateOutput` rejects outputs that are too *small*
-  (`minSizeRatio` 0.005, 1 MB floor) but nothing rejects one larger than its
-  source. A job can replace a file with a bigger file and report success.
-- **Decision:** 15% savings floor.
-- **Fix:** After `ValidateOutput` passes, compare output to source. Under 15%
-  savings, `discardOutput` and keep the original, completing the job with a clear
-  `StatusDetail` rather than failing it. Make the floor a config field
-  (default 0.15) so it lands on the settings page with the rest.
 
 ### 39. Already-Efficient Sources Are Re-Encoded
 
@@ -418,17 +437,17 @@ that gate never reached.
 | Priority | Open | Resolved |
 |----------|------|----------|
 | 🔴 Critical | 2 | 5 |
-| 🟠 High | 8 | 7 |
+| 🟠 High | 7 | 8 |
 | 🟡 Medium | 5 | 7 |
 | 🟢 Low | 3 | 17 |
-| **Total** | **18** | **36** |
+| **Total** | **17** | **37** |
 
 ---
 
 ## Suggested Order
 
-1. ~~**#35**~~ — done.
-2. **#38, #39, #40, #41, #42** — everything actively making files worse.
+1. ~~**#35**~~, ~~**#38**~~ — done.
+2. **#39, #40, #41, #42** — everything actively making files worse.
 3. **#36, #37** — process crash and the arbitrary-write path.
 4. **#43** (with its race test), then **#44**, **#45**.
 5. **#46, #47, #48, #49**.

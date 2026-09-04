@@ -1169,6 +1169,27 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 		Success:    true,
 	})
 
+	// A valid output is not necessarily a worthwhile one. Below the savings
+	// floor, replacing the source would be a regression, not an optimisation
+	// — discard the output and keep the original rather than reporting success.
+	if outInfo, statErr := os.Stat(destPath); statErr == nil &&
+		!media.MeetsSavingsFloor(info.Size, outInfo.Size(), m.config.SavingsFloor) {
+		savingsPct := (1 - float64(outInfo.Size())/float64(info.Size)) * 100
+		detail := fmt.Sprintf("Output only %.1f%% smaller than source (floor %.0f%%) — kept original",
+			savingsPct, m.config.SavingsFloor*100)
+		log.Printf("[Job %s] %s", job.ID, detail)
+		m.appendAILog(job, AILog{
+			Timestamp: time.Now(),
+			Operation: "savings_floor",
+			Provider:  "System",
+			Detail:    detail,
+			Success:   false,
+		})
+		m.discardOutput(job, destPath, detail)
+		m.updateJob(job, func(j *Job) { j.StatusDetail = detail })
+		return false, nil
+	}
+
 	log.Printf("[Job %s] Transcoding completed successfully", job.ID)
 	m.appendAILog(job, AILog{
 		Timestamp:  t0Trans,
