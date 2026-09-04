@@ -4,18 +4,19 @@
 
 ## 📋 Executive Summary
 
-Fifteen open issues, from a full source review on 2026-09-04 combined with findings
-from production testing on 2026-09-03. #35, #38, #39, and #40 closed the same day
-they were filed.
+Fourteen open issues, from a full source review on 2026-09-04 combined with findings
+from production testing on 2026-09-03. #35, #38, #39, #40, and #41 closed the same
+day they were filed.
 
 The media pipeline itself — `internal/media` (ffmpeg, progress, validate) and
 `internal/ai/meta` — is in good shape and holds up under review. The open work is
 concentrated in two places:
 
-- **Nothing else stops a job from making a file worse.** A resolution filter
-  that only applies to scanner jobs (#41–#42). Production testing found real
-  files inflated by an AI CRF suggestion with no opt-out and by re-encoding
-  already-efficient HEVC — both #39 and #40 are now closed.
+- **One output-quality gap remains: `autoUpscale`'s unsafe default and its
+  SAR-blind filter (#42).** The other four found in production testing — no
+  savings floor, no codec/bitrate filter, an unswitchable AI CRF suggestion,
+  and a resolution filter that skipped manual jobs — are now closed
+  (#38–#41).
 - **Shared mutable state is unsynchronised.** `config.Config` has no mutex at all
   while the API mutates it under running workers (#43).
 
@@ -25,6 +26,57 @@ written 2026-02-27 and was not re-verified against the code before this review.
 ---
 
 ## ✅ Closed Today
+
+### 41. `skipHighResolution` Does Not Apply to Manual Jobs
+
+- **Status:** ✅ Resolved (2026-09-04)
+- **File:** `internal/config/config.go`; `internal/scanner/scanner.go`;
+  `internal/scanner/config.go`; `internal/api/routes.go`;
+  `web/src/types.ts`; `web/src/components/ScannerConfig.tsx`;
+  `web/src/components/Settings.tsx`
+- **Details:** `SkipHighResolution`/`ResolutionHeightThreshold` lived only on
+  `ScannerConfig` and were checked only in `createJobForFile` and
+  `Discover`. `POST /api/jobs` did no resolution check at all — how *28
+  Years Later* and *A Bad Moms Christmas* got processed despite the filter
+  being on.
+- **Fix:** Moved both fields to the system `Config`, per the decision that
+  this is library policy, not scanning policy.
+  - `POST /api/jobs` now probes and rejects an optimize job at or above the
+    configured threshold with a 400, reusing `Manager.GetVideoResolution`
+    (already extended for #39) rather than a new probe path. A probe
+    failure fails open — same as the scanner's own filter — so a transient
+    ffprobe error never blocks a manual job.
+  - Existing installs: `LoadScannerConfig` now checks the raw
+    `scanner_config.json` bytes for the legacy keys (the struct no longer
+    has the fields, so a plain `Unmarshal` would silently drop them),
+    migrates them into the system config, `cfg.Save()`s it, and — only on
+    success — rewrites `scanner_config.json` without the legacy keys. That
+    last step is what makes the migration one-time: without it, a restart
+    would re-read the untouched legacy file and clobber any value someone
+    had since changed through the new Settings control. If `cfg.Save()`
+    fails, the legacy file is left alone so the setting isn't lost and
+    migration retries on the next start.
+  - Frontend: the field moved from `ScannerConfig`/`ScannerConfig.tsx` to
+    `SystemConfig`/`Settings.tsx` (Encoding Settings card, next to CRF).
+    `ScannerConfig.tsx` keeps a short note pointing at the new location
+    instead of removing the control silently.
+- **Tests:** `TestLoadScannerConfigMigratesResolutionFilter` (legacy keys
+  present → migrated into system config, persisted, and stripped from the
+  scanner file so a second load doesn't re-migrate and clobber a
+  since-changed Settings value) and
+  `TestLoadScannerConfigNoMigrationWhenNoLegacyKeys` (no legacy keys → no
+  write at all). Full `internal/config`, `internal/scanner`,
+  `internal/jobs`, `internal/api` suites re-run with `-race -count=1`: all
+  pass. `go vet ./...`, `go build ./...`, `gofmt -l .` clean. Frontend:
+  `npm run build`/`npm run lint` clean. Manually verified end-to-end
+  against a running server: toggled the new Settings control and the
+  threshold field, confirmed both persisted via `GET /api/config`, and
+  confirmed the Scanner page no longer has a duplicate control. Could not
+  verify the actual `POST /api/jobs` *rejection* path against a real
+  high-resolution file — no `ffmpeg`/`ffprobe` binary in this sandbox — but
+  did confirm the fail-open path: with the filter on and a threshold of
+  2160, a job request against a source ffprobe can't read still returns
+  201, not a false rejection.
 
 ### 40. AI CRF Suggestion Cannot Be Switched Off
 
@@ -234,21 +286,8 @@ written 2026-02-27 and was not re-verified against the code before this review.
 
 ## 🟠 High — Output Quality
 
-*All five found during production testing, 2026-09-03; #38, #39, and #40 closed
-2026-09-04.*
-
-### 41. `skipHighResolution` Does Not Apply to Manual Jobs
-
-- **Status:** 🟠 Open
-- **File:** `internal/scanner/scanner.go`; `internal/config/config.go`; `internal/api/routes.go`
-- **Details:** `SkipHighResolution` and `ResolutionHeightThreshold` live on
-  `ScannerConfig` and are checked only in `createJobForFile` and `Discover`.
-  `POST /api/jobs` does no resolution check at all — which is how *28 Years Later*
-  and *A Bad Moms Christmas* were processed despite the filter being on.
-- **Decision:** Move both fields to the system `Config`. This is a policy about
-  the library, not about scanning, and both paths should share it.
-- **Fix:** Move the fields, check them in `POST /api/jobs`, and migrate persisted
-  `scanner_config.json` values on load so existing installs keep their setting.
+*All five found during production testing, 2026-09-03; #38, #39, #40, and #41
+closed 2026-09-04.*
 
 ### 42. `autoUpscale` Defaults On, and Upscaling Ignores SAR
 
@@ -398,9 +437,9 @@ written 2026-02-27 and was not re-verified against the code before this review.
   - Readable but not settable outside the setup wizard: `SourceDir`, `DestDir`,
     `GPUVendor`.
   - New fields from this review that must land here too: savings floor (#38),
-    bitrate-density filter (#39), `skipHighResolution` and its threshold once
-    moved (#41). The AI CRF toggle (#40) already landed here as part of its
-    own fix rather than waiting on this ticket.
+    bitrate-density filter (#39). The AI CRF toggle (#40) and
+    `skipHighResolution`/threshold (#41) already landed here as part of their
+    own fixes rather than waiting on this ticket.
 - **Fix:** For each field decide runtime-settable, restart-required, or
   deliberately env-only, and show that state in the UI rather than silently
   ignoring input.
@@ -492,17 +531,17 @@ that gate never reached.
 | Priority | Open | Resolved |
 |----------|------|----------|
 | 🔴 Critical | 2 | 5 |
-| 🟠 High | 5 | 10 |
+| 🟠 High | 4 | 11 |
 | 🟡 Medium | 5 | 7 |
 | 🟢 Low | 3 | 17 |
-| **Total** | **15** | **39** |
+| **Total** | **14** | **40** |
 
 ---
 
 ## Suggested Order
 
-1. ~~**#35**~~, ~~**#38**~~, ~~**#39**~~, ~~**#40**~~ — done.
-2. **#41, #42** — everything actively making files worse.
+1. ~~**#35**~~, ~~**#38**~~, ~~**#39**~~, ~~**#40**~~, ~~**#41**~~ — done.
+2. **#42** — everything actively making files worse.
 3. **#36, #37** — process crash and the arbitrary-write path.
 4. **#43** (with its race test), then **#44**, **#45**.
 5. **#46, #47, #48, #49**.

@@ -306,6 +306,22 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			return c.Status(403).JSON(fiber.Map{"error": err.Error()})
 		}
 
+		// Resolution filtering is library policy, not scanning policy (#41):
+		// this was previously checked only for scanner-created jobs, which is
+		// how already-high-resolution files got manually queued despite the
+		// filter being on. A probe failure is not grounds to refuse the job —
+		// it fails open, same as the scanner's own filter.
+		if req.Type == jobs.JobTypeOptimize && cfg.SkipHighResolution {
+			ctx, cancel := context.WithTimeout(c.Context(), 10*time.Second)
+			_, height, _, _, probeErr := jm.GetVideoResolution(ctx, sourcePath)
+			cancel()
+			if probeErr == nil && height >= cfg.ResolutionHeightThreshold {
+				return c.Status(400).JSON(fiber.Map{"error": fmt.Sprintf(
+					"source is %dp, at or above the configured %dp skip threshold",
+					height, cfg.ResolutionHeightThreshold)})
+			}
+		}
+
 		destPath := req.DestPath
 		if destPath != "" {
 			// If destination is specified, clean it
@@ -401,50 +417,54 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			subtitleAPIKey = security.MaskKey(cfg.SubtitleAPIKey)
 		}
 		return c.JSON(fiber.Map{
-			"sourceDir":           cfg.SourceDir,
-			"destDir":             cfg.DestDir,
-			"gpuVendor":           cfg.GPUVendor,
-			"qualityPreset":       cfg.QualityPreset,
-			"crf":                 cfg.CRF,
-			"aiProvider":          cfg.AIProvider,
-			"aiApiKey":            security.MaskKey(cfg.AIApiKey),
-			"aiEndpoint":          cfg.AIEndpoint,
-			"aiModel":             cfg.AIModel,
-			"licenseKey":          security.MaskKey(cfg.LicenseKey),
-			"isPremium":           cfg.IsPremium,
-			"planName":            license.GetPlanName(cfg.LicenseKey),
-			"verifyOutput":        cfg.VerifyOutput,
-			"deleteSource":        cfg.DeleteSource,
-			"autoConvertISO":      cfg.AutoConvertISO,
-			"overrideAICRF":       cfg.OverrideAICRF,
-			"subtitleMode":        cfg.SubtitleMode,
-			"subtitleLang":        cfg.SubtitleLang,
-			"subtitleApiKey":      subtitleAPIKey,
-			"subtitleUsername":    cfg.SubtitleUsername,
-			"subtitlePasswordSet": cfg.SubtitlePassword != "",
-			"schedule":            cfg.Schedule,
+			"sourceDir":                 cfg.SourceDir,
+			"destDir":                   cfg.DestDir,
+			"gpuVendor":                 cfg.GPUVendor,
+			"qualityPreset":             cfg.QualityPreset,
+			"crf":                       cfg.CRF,
+			"aiProvider":                cfg.AIProvider,
+			"aiApiKey":                  security.MaskKey(cfg.AIApiKey),
+			"aiEndpoint":                cfg.AIEndpoint,
+			"aiModel":                   cfg.AIModel,
+			"licenseKey":                security.MaskKey(cfg.LicenseKey),
+			"isPremium":                 cfg.IsPremium,
+			"planName":                  license.GetPlanName(cfg.LicenseKey),
+			"verifyOutput":              cfg.VerifyOutput,
+			"deleteSource":              cfg.DeleteSource,
+			"autoConvertISO":            cfg.AutoConvertISO,
+			"overrideAICRF":             cfg.OverrideAICRF,
+			"skipHighResolution":        cfg.SkipHighResolution,
+			"resolutionHeightThreshold": cfg.ResolutionHeightThreshold,
+			"subtitleMode":              cfg.SubtitleMode,
+			"subtitleLang":              cfg.SubtitleLang,
+			"subtitleApiKey":            subtitleAPIKey,
+			"subtitleUsername":          cfg.SubtitleUsername,
+			"subtitlePasswordSet":       cfg.SubtitlePassword != "",
+			"schedule":                  cfg.Schedule,
 		})
 	})
 
 	api.Post("/config", func(c *fiber.Ctx) error {
 		var req struct {
-			QualityPreset    string                     `json:"qualityPreset"`
-			CRF              *int                       `json:"crf"`
-			AIProvider       string                     `json:"aiProvider"`
-			AIApiKey         string                     `json:"aiApiKey"`
-			AIEndpoint       string                     `json:"aiEndpoint"`
-			AIModel          string                     `json:"aiModel"`
-			LicenseKey       string                     `json:"licenseKey"`
-			VerifyOutput     *bool                      `json:"verifyOutput"`
-			DeleteSource     *bool                      `json:"deleteSource"`
-			AutoConvertISO   *bool                      `json:"autoConvertISO"`
-			OverrideAICRF    *bool                      `json:"overrideAICRF"`
-			SubtitleMode     string                     `json:"subtitleMode"`
-			SubtitleLang     string                     `json:"subtitleLang"`
-			SubtitleAPIKey   string                     `json:"subtitleApiKey"`
-			SubtitleUsername string                     `json:"subtitleUsername"`
-			SubtitlePassword string                     `json:"subtitlePassword"`
-			Schedule         *config.ProcessingSchedule `json:"schedule"`
+			QualityPreset             string                     `json:"qualityPreset"`
+			CRF                       *int                       `json:"crf"`
+			AIProvider                string                     `json:"aiProvider"`
+			AIApiKey                  string                     `json:"aiApiKey"`
+			AIEndpoint                string                     `json:"aiEndpoint"`
+			AIModel                   string                     `json:"aiModel"`
+			LicenseKey                string                     `json:"licenseKey"`
+			VerifyOutput              *bool                      `json:"verifyOutput"`
+			DeleteSource              *bool                      `json:"deleteSource"`
+			AutoConvertISO            *bool                      `json:"autoConvertISO"`
+			OverrideAICRF             *bool                      `json:"overrideAICRF"`
+			SkipHighResolution        *bool                      `json:"skipHighResolution"`
+			ResolutionHeightThreshold *int                       `json:"resolutionHeightThreshold"`
+			SubtitleMode              string                     `json:"subtitleMode"`
+			SubtitleLang              string                     `json:"subtitleLang"`
+			SubtitleAPIKey            string                     `json:"subtitleApiKey"`
+			SubtitleUsername          string                     `json:"subtitleUsername"`
+			SubtitlePassword          string                     `json:"subtitlePassword"`
+			Schedule                  *config.ProcessingSchedule `json:"schedule"`
 		}
 		if err := c.BodyParser(&req); err != nil {
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
@@ -492,6 +512,12 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		}
 		if req.OverrideAICRF != nil {
 			cfg.OverrideAICRF = *req.OverrideAICRF
+		}
+		if req.SkipHighResolution != nil {
+			cfg.SkipHighResolution = *req.SkipHighResolution
+		}
+		if req.ResolutionHeightThreshold != nil {
+			cfg.ResolutionHeightThreshold = *req.ResolutionHeightThreshold
 		}
 
 		// Subtitle settings

@@ -95,6 +95,14 @@ type Config struct {
 	// behaviour until they opt out.
 	OverrideAICRF bool `json:"overrideAICRF"` // Default: false
 
+	// SkipHighResolution and ResolutionHeightThreshold used to live only on
+	// ScannerConfig, so POST /api/jobs and manually-queued files never saw
+	// them — how a 2160p source got processed despite the filter being on.
+	// This is a policy about the library, not about scanning, so both the
+	// scanner and manual job creation share it from here (#41).
+	SkipHighResolution        bool `json:"skipHighResolution"`        // Default: false
+	ResolutionHeightThreshold int  `json:"resolutionHeightThreshold"` // Default: 1080
+
 	// SavingsFloor is the minimum fraction (0.15 == 15%) an output must be
 	// smaller than its source to be kept; below it the output is discarded and
 	// the original retained. Not yet exposed on GET/POST /api/config or the
@@ -142,40 +150,42 @@ var ConfigFile = getEnv("CONFIG_FILE", "/data/config.json")
 func Load() *Config {
 	// Default values
 	cfg := &Config{
-		SchemaVersion:        currentSchemaVersion,
-		Port:                 getEnv("PORT", "8080"),
-		SourceDir:            getEnv("SOURCE_DIR", "/storage"),
-		DestDir:              getEnv("DEST_DIR", "/output"),
-		GPUVendor:            getEnv("GPU_VENDOR", "auto"),
-		QualityPreset:        getEnv("QUALITY_PRESET", "medium"),
-		CRF:                  getEnvInt("CRF", 23),
-		MaxConcurrentJobs:    getEnvInt("MAX_CONCURRENT_JOBS", 2),
-		AIProvider:           getEnv("AI_PROVIDER", "none"),
-		AIApiKey:             getEnv("AI_API_KEY", ""),
-		AIEndpoint:           getEnv("AI_ENDPOINT", ""),
-		AIModel:              getEnv("AI_MODEL", ""),
-		AdminPassword:        getEnv("ADMIN_PASSWORD", ""),
-		LicenseKey:           getEnv("LICENSE_KEY", ""),
-		ScannerEnabled:       getEnvBool("SCANNER_ENABLED", false),
-		ScannerMode:          getEnv("SCANNER_MODE", "manual"),
-		ScannerIntervalSec:   getEnvInt("SCANNER_INTERVAL_SEC", 300),
-		ScannerAutoCreate:    getEnvBool("SCANNER_AUTO_CREATE", true),
-		ScannerProcessedFile: getEnv("SCANNER_PROCESSED_FILE", "/data/processed.json"),
-		SubtitleMode:         getEnv("SUBTITLE_MODE", "selective"),
-		SubtitleLang:         getEnv("SUBTITLE_LANG", "en"),
-		SubtitleAPIKey:       getEnv("SUBTITLE_API_KEY", ""),
-		SubtitleUsername:     getEnv("SUBTITLE_USERNAME", ""),
-		SubtitlePassword:     getEnv("SUBTITLE_PASSWORD", ""),
-		VerifyOutput:         getEnvBool("VERIFY_OUTPUT", false),
-		DeleteSource:         getEnvBool("DELETE_SOURCE", false),
-		AutoConvertISO:       getEnvBool("AUTO_CONVERT_ISO", false),
-		OverrideAICRF:        getEnvBool("OVERRIDE_AI_CRF", false),
-		SavingsFloor:         getEnvFloat("SAVINGS_FLOOR", 0.15),
-		DensityFloor:         getEnvFloat("DENSITY_FLOOR", media.DefaultDensityFloor),
-		ReplaceInPlace:       getEnvBool("REPLACE_IN_PLACE", false),
-		HoldingDir:           getEnv("HOLDING_DIR", ""),
-		PUID:                 getEnvInt("PUID", -1),
-		PGID:                 getEnvInt("PGID", -1),
+		SchemaVersion:             currentSchemaVersion,
+		Port:                      getEnv("PORT", "8080"),
+		SourceDir:                 getEnv("SOURCE_DIR", "/storage"),
+		DestDir:                   getEnv("DEST_DIR", "/output"),
+		GPUVendor:                 getEnv("GPU_VENDOR", "auto"),
+		QualityPreset:             getEnv("QUALITY_PRESET", "medium"),
+		CRF:                       getEnvInt("CRF", 23),
+		MaxConcurrentJobs:         getEnvInt("MAX_CONCURRENT_JOBS", 2),
+		AIProvider:                getEnv("AI_PROVIDER", "none"),
+		AIApiKey:                  getEnv("AI_API_KEY", ""),
+		AIEndpoint:                getEnv("AI_ENDPOINT", ""),
+		AIModel:                   getEnv("AI_MODEL", ""),
+		AdminPassword:             getEnv("ADMIN_PASSWORD", ""),
+		LicenseKey:                getEnv("LICENSE_KEY", ""),
+		ScannerEnabled:            getEnvBool("SCANNER_ENABLED", false),
+		ScannerMode:               getEnv("SCANNER_MODE", "manual"),
+		ScannerIntervalSec:        getEnvInt("SCANNER_INTERVAL_SEC", 300),
+		ScannerAutoCreate:         getEnvBool("SCANNER_AUTO_CREATE", true),
+		ScannerProcessedFile:      getEnv("SCANNER_PROCESSED_FILE", "/data/processed.json"),
+		SubtitleMode:              getEnv("SUBTITLE_MODE", "selective"),
+		SubtitleLang:              getEnv("SUBTITLE_LANG", "en"),
+		SubtitleAPIKey:            getEnv("SUBTITLE_API_KEY", ""),
+		SubtitleUsername:          getEnv("SUBTITLE_USERNAME", ""),
+		SubtitlePassword:          getEnv("SUBTITLE_PASSWORD", ""),
+		VerifyOutput:              getEnvBool("VERIFY_OUTPUT", false),
+		DeleteSource:              getEnvBool("DELETE_SOURCE", false),
+		AutoConvertISO:            getEnvBool("AUTO_CONVERT_ISO", false),
+		OverrideAICRF:             getEnvBool("OVERRIDE_AI_CRF", false),
+		SkipHighResolution:        getEnvBool("SKIP_HIGH_RESOLUTION", false),
+		ResolutionHeightThreshold: getEnvInt("RESOLUTION_HEIGHT_THRESHOLD", 1080),
+		SavingsFloor:              getEnvFloat("SAVINGS_FLOOR", 0.15),
+		DensityFloor:              getEnvFloat("DENSITY_FLOOR", media.DefaultDensityFloor),
+		ReplaceInPlace:            getEnvBool("REPLACE_IN_PLACE", false),
+		HoldingDir:                getEnv("HOLDING_DIR", ""),
+		PUID:                      getEnvInt("PUID", -1),
+		PGID:                      getEnvInt("PGID", -1),
 	}
 
 	if cfg.GPUVendor == "auto" || cfg.GPUVendor == "" {
@@ -256,6 +266,8 @@ func (c *Config) loadFromDisk() error {
 	m.boolean(&c.DeleteSource, importJSON.DeleteSource, present("deleteSource"), "DELETE_SOURCE", "deleteSource")
 	m.boolean(&c.AutoConvertISO, importJSON.AutoConvertISO, present("autoConvertISO"), "AUTO_CONVERT_ISO", "autoConvertISO")
 	m.boolean(&c.OverrideAICRF, importJSON.OverrideAICRF, present("overrideAICRF"), "OVERRIDE_AI_CRF", "overrideAICRF")
+	m.boolean(&c.SkipHighResolution, importJSON.SkipHighResolution, present("skipHighResolution"), "SKIP_HIGH_RESOLUTION", "skipHighResolution")
+	m.integer(&c.ResolutionHeightThreshold, importJSON.ResolutionHeightThreshold, present("resolutionHeightThreshold"), "RESOLUTION_HEIGHT_THRESHOLD", "resolutionHeightThreshold")
 	m.float(&c.SavingsFloor, importJSON.SavingsFloor, present("savingsFloor"), "SAVINGS_FLOOR", "savingsFloor")
 	m.float(&c.DensityFloor, importJSON.DensityFloor, present("densityFloor"), "DENSITY_FLOOR", "densityFloor")
 

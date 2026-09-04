@@ -374,30 +374,10 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
 
                         <div className="form-group">
                             <label className="label mb-2 block">Skip High Resolution Files</label>
-                            <label className="flex items-center gap-2 cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    checked={config.skipHighResolution ?? false}
-                                    onChange={e => setConfig({ ...config, skipHighResolution: e.target.checked })}
-                                    className="w-4 h-4"
-                                />
-                                <span className="text-secondary text-sm">Skip files already at or above target resolution</span>
-                            </label>
-                            {config.skipHighResolution && (
-                                <div className="mt-2">
-                                    <label className="label text-xs mb-1 block">Height threshold (lines)</label>
-                                    <input
-                                        type="number"
-                                        className="input text-sm"
-                                        value={config.resolutionHeightThreshold ?? 1080}
-                                        onChange={e => setConfig({ ...config, resolutionHeightThreshold: parseInt(e.target.value) || 1080 })}
-                                        min="240"
-                                        max="4320"
-                                        style={{ width: '120px' }}
-                                    />
-                                    <p className="text-xs text-secondary mt-1">Files with video height ≥ this value will be skipped (e.g. 1080 skips 1080p+)</p>
-                                </div>
-                            )}
+                            <p className="text-secondary text-sm">
+                                Moved to Settings → Encoding Settings — it's a library-wide policy now,
+                                applied to manually-created jobs too, not just scanner discovery.
+                            </p>
                         </div>
                     </div>
                 </div>

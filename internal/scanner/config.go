@@ -59,6 +59,7 @@ func LoadScannerConfig(cfg *config.Config, watchDirsFile string) (*ScannerConfig
 		var fullCfg ScannerConfig
 		if err := json.Unmarshal(data, &fullCfg); err == nil {
 			fullCfg.Validate()
+			migrateResolutionFilter(cfg, data, watchDirsFile, &fullCfg)
 			return &fullCfg, nil
 		}
 		log.Printf("[Scanner] Warning: could not parse config file %s as ScannerConfig: %v — using defaults", watchDirsFile, err)
@@ -72,6 +73,50 @@ func LoadScannerConfig(cfg *config.Config, watchDirsFile string) (*ScannerConfig
 	}
 
 	return scannerCfg, nil
+}
+
+// migrateResolutionFilter moves a legacy scanner_config.json's
+// skipHighResolution/resolutionHeightThreshold into the system Config, where
+// #41 put them so POST /api/jobs applies the same filter manual jobs never
+// saw. rawJSON is the file's original bytes — parsed struct, since the fields
+// no longer exist on ScannerConfig.
+//
+// One-time: on success, rewrites watchDirsFile from parsed (which, lacking
+// those fields, naturally omits them), so this never re-fires for the same
+// install and never overwrites a value someone has since set through the
+// system Settings page. If cfg.Save() fails, the legacy file is left alone so
+// the setting isn't lost and migration can retry on the next start.
+func migrateResolutionFilter(cfg *config.Config, rawJSON []byte, watchDirsFile string, parsed *ScannerConfig) {
+	var legacy struct {
+		SkipHighResolution        *bool `json:"skipHighResolution"`
+		ResolutionHeightThreshold *int  `json:"resolutionHeightThreshold"`
+	}
+	if err := json.Unmarshal(rawJSON, &legacy); err != nil {
+		return
+	}
+	if legacy.SkipHighResolution == nil && legacy.ResolutionHeightThreshold == nil {
+		return // nothing legacy to migrate — already done, or never set
+	}
+
+	if legacy.SkipHighResolution != nil {
+		cfg.SkipHighResolution = *legacy.SkipHighResolution
+	}
+	if legacy.ResolutionHeightThreshold != nil && *legacy.ResolutionHeightThreshold > 0 {
+		cfg.ResolutionHeightThreshold = *legacy.ResolutionHeightThreshold
+	}
+	if err := cfg.Save(); err != nil {
+		log.Printf("[Scanner] Warning: could not migrate resolution filter to system config: %v — will retry next start", err)
+		return
+	}
+	log.Printf("[Scanner] Migrated skipHighResolution/resolutionHeightThreshold from %s to the system config (#41)", watchDirsFile)
+
+	out, err := json.MarshalIndent(parsed, "", "  ")
+	if err != nil {
+		return
+	}
+	if err := os.WriteFile(watchDirsFile, out, 0600); err != nil {
+		log.Printf("[Scanner] Warning: could not rewrite %s after migration: %v", watchDirsFile, err)
+	}
 }
 
 // SaveWatchDirectories saves watch directory configuration to JSON file

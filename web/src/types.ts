@@ -63,6 +63,8 @@ export interface SystemConfig {
     verifyOutput?: boolean;
     deleteSource?: boolean;
     overrideAICRF?: boolean; // true = use the configured CRF, skip the AI suggestion
+    skipHighResolution?: boolean; // library-wide, applies to scanner and manually-queued jobs
+    resolutionHeightThreshold?: number;
     subtitleMode?: 'always' | 'selective' | 'never';
     subtitleLang?: string;
     subtitleApiKey?: string;
@@ -94,8 +96,6 @@ export interface ScannerConfig {
     outputDirectory: string;
     extractExtensions: string[];
     optimizeExtensions: string[];
-    skipHighResolution?: boolean;
-    resolutionHeightThreshold?: number;
 }
 export interface SystemStats {
     cpuUsage: number;

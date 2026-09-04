@@ -60,10 +60,6 @@ type ScannerConfig struct {
 	// File type handling
 	ExtractExtensions  []string `json:"extractExtensions"`  // e.g., [".iso"]
 	OptimizeExtensions []string `json:"optimizeExtensions"` // e.g., [".mkv", ".mp4", ".avi"]
-
-	// Resolution filtering
-	SkipHighResolution        bool `json:"skipHighResolution"`
-	ResolutionHeightThreshold int  `json:"resolutionHeightThreshold"` // default 1080
 }
 
 func (c *ScannerConfig) Validate() {
@@ -81,9 +77,6 @@ func (c *ScannerConfig) Validate() {
 	}
 	if c.Mode == "" {
 		c.Mode = ScanModeManual
-	}
-	if c.SkipHighResolution && c.ResolutionHeightThreshold == 0 {
-		c.ResolutionHeightThreshold = 1080
 	}
 }
 
@@ -611,10 +604,15 @@ func (s *Scanner) createJobForFile(path string) error {
 		return nil
 	}
 
+	// Resolution and codec/density filtering are library policy, not scanning
+	// policy — both live on the system config so POST /api/jobs applies the
+	// same rules (#41).
+	sysCfg := s.jobManager.GetConfig()
+
 	// Skip high-resolution files for optimize jobs if configured
-	if jobType == jobs.JobTypeOptimize && s.config.SkipHighResolution {
-		if s.isHighResolution(path, s.config.ResolutionHeightThreshold) {
-			log.Printf("[Scanner] Skipping %s: resolution >= %dp", path, s.config.ResolutionHeightThreshold)
+	if jobType == jobs.JobTypeOptimize && sysCfg.SkipHighResolution {
+		if s.isHighResolution(path, sysCfg.ResolutionHeightThreshold) {
+			log.Printf("[Scanner] Skipping %s: resolution >= %dp", path, sysCfg.ResolutionHeightThreshold)
 			s.processedDB.MarkProcessed(ProcessedFile{Path: path, JobType: string(jobType)})
 			return nil
 		}
@@ -642,7 +640,6 @@ func (s *Scanner) createJobForFile(path string) error {
 
 	// Inherit delete/verify settings from system config so scanner jobs
 	// behave identically to manually-created jobs.
-	sysCfg := s.jobManager.GetConfig()
 
 	// Create job
 	job := &jobs.Job{
@@ -957,10 +954,11 @@ func (s *Scanner) Discover() ([]DiscoveredFile, error) {
 				w, h, codec, bpp, _ := s.jobManager.GetVideoResolution(ctx, path)
 				cancel()
 				videoWidth, videoHeight = w, h
-				if s.config.SkipHighResolution && h >= s.config.ResolutionHeightThreshold {
+				sysCfg := s.jobManager.GetConfig()
+				if sysCfg.SkipHighResolution && h >= sysCfg.ResolutionHeightThreshold {
 					continue
 				}
-				if media.IsAlreadyEfficient(codec, bpp, s.jobManager.GetConfig().DensityFloor) {
+				if media.IsAlreadyEfficient(codec, bpp, sysCfg.DensityFloor) {
 					continue
 				}
 			}

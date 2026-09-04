@@ -184,6 +184,40 @@ export default function Settings({ config: initialConfig, onConfigUpdate, token 
                                 />
                                 <span className="text-xs text-secondary mt-1">Lower = better quality (0-51)</span>
                             </div>
+
+                            <div className="setting-item">
+                                <label className="setting-label">Skip High Resolution Files</label>
+                                <label className="flex items-center gap-2 cursor-pointer mt-2">
+                                    <input
+                                        type="checkbox"
+                                        className="checkbox"
+                                        checked={config.skipHighResolution ?? false}
+                                        onChange={(e) => handleSave({ skipHighResolution: e.target.checked })}
+                                        disabled={isSaving}
+                                    />
+                                    <span className="text-sm">Skip files already at or above a target resolution</span>
+                                </label>
+                                <p className="text-xs text-secondary mt-1">
+                                    Applies to scanner discovery and manually-created jobs alike.
+                                </p>
+                                {config.skipHighResolution && (
+                                    <div className="mt-2">
+                                        <label className="setting-label text-xs">Height threshold (lines)</label>
+                                        <input
+                                            type="number"
+                                            className="input"
+                                            style={{ width: '120px' }}
+                                            value={config.resolutionHeightThreshold ?? 1080}
+                                            onChange={(e) => setConfig({ ...config, resolutionHeightThreshold: parseInt(e.target.value) || 1080 })}
+                                            onBlur={(e) => handleSave({ resolutionHeightThreshold: parseInt(e.target.value) || 1080 })}
+                                            disabled={isSaving}
+                                            min="240"
+                                            max="4320"
+                                        />
+                                        <span className="text-xs text-secondary mt-1"> Files with video height ≥ this value will be skipped (e.g. 1080 skips 1080p+)</span>
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     </div>
                 </div>
