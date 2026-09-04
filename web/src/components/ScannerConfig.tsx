@@ -297,7 +297,7 @@ export default function ScannerConfigComponent({ config: initialConfig, onSave }
                                     type="number"
                                     className="input"
                                     value={config.scanIntervalSec}
-                                    onChange={e => setConfig({ ...config, scanIntervalSec: parseInt(e.target.value) })}
+                                    onChange={e => setConfig({ ...config, scanIntervalSec: parseInt(e.target.value) || 300 })}
                                     min="60"
                                 />
                             </div>

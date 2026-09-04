@@ -645,6 +645,25 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 		}
 
+		// time.NewTicker panics on a non-positive duration, and periodicScan
+		// builds one straight from this field — Validate() (called inside
+		// UpdateConfig below) floors any bad value as a last line of
+		// defense, but silently replacing a deliberately-bad value there
+		// means the operator never finds out their input didn't take.
+		//
+		// 0 is left to Validate()'s silent default rather than rejected
+		// here: this endpoint has no partial-update contract (unlike
+		// POST /api/config's pointer fields) and BodyParser leaves every
+		// omitted field at its zero value the same way, so treating 0 as
+		// "not provided" is consistent with every other field on this
+		// struct. A value that's present but still under the floor (1-59,
+		// or negative) can only be a deliberate, bad input, so that's what
+		// gets rejected (#36).
+		if newCfg.ScanIntervalSec != 0 && newCfg.ScanIntervalSec < scanner.MinScanIntervalSec {
+			return c.Status(400).JSON(fiber.Map{"error": fmt.Sprintf(
+				"scanIntervalSec must be at least %d seconds", scanner.MinScanIntervalSec)})
+		}
+
 		// Security: Validate watch directories
 		for i, dir := range newCfg.WatchDirectories {
 			validPath, err := security.ValidatePath(dir.Path, cfg.SourceDir)

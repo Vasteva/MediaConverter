@@ -31,6 +31,20 @@ const (
 	ScanModeHybrid   ScanMode = "hybrid"   // Startup + Watch + Periodic backup
 )
 
+// MinScanIntervalSec is the floor for ScanIntervalSec — time.NewTicker
+// panics on zero or negative, and this is also the value the settings UI's
+// number input already advertises as its minimum. Exported so routes.go can
+// reject an out-of-range POST /api/scanner/config with the same number
+// Validate() would otherwise silently repair it to.
+//
+// DefaultScanIntervalSec is what Validate() floors an out-of-range value to,
+// matching system Config's own SCANNER_INTERVAL_SEC default so a repaired
+// value looks like a deliberate choice rather than an arbitrary one.
+const (
+	MinScanIntervalSec     = 60
+	DefaultScanIntervalSec = 300
+)
+
 // WatchDirectory represents a directory to monitor
 type WatchDirectory struct {
 	Path              string   `json:"path"`
@@ -77,6 +91,17 @@ func (c *ScannerConfig) Validate() {
 	}
 	if c.Mode == "" {
 		c.Mode = ScanModeManual
+	}
+	// Floor, not just a zero-check: time.NewTicker panics on any non-positive
+	// duration, and periodicScan builds one straight from this field with no
+	// check of its own. A cleared Settings UI field previously arrived here
+	// as 0 (see routes.go's rejection of the same case for how), which
+	// crashed the whole process the moment periodic/hybrid mode next ticked.
+	// Applies regardless of Mode — irrelevant in manual/startup/watch, but
+	// keeps this the one place that guarantees no live ticker ever sees a
+	// bad value (#36).
+	if c.ScanIntervalSec < MinScanIntervalSec {
+		c.ScanIntervalSec = DefaultScanIntervalSec
 	}
 	// AutoUpscale has no non-zero default to apply here — Go's zero value
 	// for a bool already is the "off" default this field wants, and every

@@ -4,16 +4,19 @@
 
 ## 📋 Executive Summary
 
-Thirteen open issues, from a full source review on 2026-09-04 combined with findings
-from production testing on 2026-09-03. #35 and #38–#42 — everything found in
-production testing — closed the same day they were filed.
+Twelve open issues, from a full source review on 2026-09-04 combined with findings
+from production testing on 2026-09-03. #35, #36, and #38–#42 — everything found in
+production testing plus the settings-page crash — closed the same day they were
+filed.
 
 The media pipeline itself — `internal/media` (ffmpeg, progress, validate) and
 `internal/ai/meta` — is in good shape and holds up under review. The remaining open
 work is concentrated in one place:
 
 - **Shared mutable state is unsynchronised.** `config.Config` has no mutex at all
-  while the API mutates it under running workers (#43).
+  while the API mutates it under running workers (#43) — and this is no longer
+  theoretical: a #36 regression test tripped `s.config`'s race under `-race` on
+  the first try.
 
 The previous revision of this file claimed all known bugs were resolved. That was
 written 2026-02-27 and was not re-verified against the code before this review.
@@ -21,6 +24,57 @@ written 2026-02-27 and was not re-verified against the code before this review.
 ---
 
 ## ✅ Closed Today
+
+### 36. `time.NewTicker(0)` Panic Takes Down the Process
+
+- **Status:** ✅ Resolved (2026-09-04)
+- **File:** `internal/scanner/scanner.go`; `internal/api/routes.go`;
+  `web/src/components/ScannerConfig.tsx`
+- **Details:** `ScannerConfig.Validate()` defaulted every field except
+  `ScanIntervalSec`. The settings UI used `parseInt(e.target.value)`, so
+  clearing the interval field yielded `NaN`, serialised as JSON `null`, and
+  arrived at the backend as `0`. `periodicScan` then called
+  `time.NewTicker(0)`, which panics — in a goroutine, so it took the whole
+  process down, not just the request. The `min="60"` attribute was a
+  browser hint with no server-side counterpart.
+- **Fix:** All three layers named in the ticket:
+  - `Validate()` now floors `ScanIntervalSec` to `DefaultScanIntervalSec`
+    (300s) whenever it's below `MinScanIntervalSec` (60s, exported so
+    `routes.go` can reject at the same number rather than duplicating it).
+    Applies regardless of scan mode — irrelevant when not periodic/hybrid,
+    but guarantees no code path can ever hand `periodicScan` a bad value.
+  - `POST /api/scanner/config` rejects (400) a `ScanIntervalSec` that's
+    present but under the floor (1-59, or negative) — so a deliberately bad
+    value is surfaced to the caller instead of silently repaired. `0` is
+    deliberately *not* rejected here and left to `Validate()`'s silent
+    default instead: this endpoint parses directly into a value
+    `ScannerConfig` struct with no partial-update contract (unlike `POST
+    /api/config`'s pointer fields), so an omitted field already arrives as
+    `0` the same way an explicit `0` would — treating plain `0` as
+    "not provided," consistent with how every other field on this struct
+    already behaves, while still catching an unambiguous bad input.
+  - `ScannerConfig.tsx`'s interval input now falls back to `300` when
+    `parseInt` returns `NaN` (`parseInt(e.target.value) || 300`, matching
+    the same defensive pattern already used for `resolutionHeightThreshold`
+    in Settings.tsx from #41) — so a cleared field never leaves local state
+    at a value that would trip the backend floor in the first place.
+- **Tests:** `TestScannerConfigValidateFloorsScanInterval` (0, negative, and
+  below-floor all repaired to 300; the floor itself and values above it
+  pass through unchanged; asserts the result is never `<= 0`) and
+  `TestPostScannerConfigRejectsLowScanInterval` — the first route-level
+  test in `internal/api`, wired against a real `jobs.Manager` and
+  `scanner.Scanner` rather than mocks. Deliberately posts with the scanner
+  disabled: repeatedly starting/stopping a *live* scanner across subtests
+  turned out to trip the scanner's own pre-existing, already-tracked
+  config-access race (#43) under `-race` — confirmed but not this ticket's
+  to fix, so the crash path itself is proven separately and
+  deterministically by the `Validate()` test instead. Full `-race` suite,
+  `go vet ./...`, `go build ./...`, `gofmt -l .` clean; frontend `npm run
+  build`/`lint` clean. Manually verified end-to-end against a running
+  server: cleared the Scan Interval field in the browser (confirmed it
+  snaps to 300 rather than going blank), saved without the process
+  crashing, and confirmed a direct `POST /api/scanner/config` with
+  `scanIntervalSec: 10` returns 400 with a clear message.
 
 ### 42. `autoUpscale` Defaults On, and Upscaling Ignores SAR
 
@@ -297,18 +351,7 @@ written 2026-02-27 and was not re-verified against the code before this review.
 
 ## 🔴 Critical
 
-### 36. `time.NewTicker(0)` Panic Takes Down the Process
-
-- **Status:** 🔴 Open
-- **File:** `internal/scanner/scanner.go`; `web/src/components/ScannerConfig.tsx`
-- **Details:** `ScannerConfig.Validate()` defaults every field except
-  `ScanIntervalSec`. The settings UI uses `parseInt(e.target.value)`, so clearing
-  the interval field yields `NaN`, serialises as `null`, and arrives as `0`.
-  `periodicScan` then calls `time.NewTicker(0)`, which panics in a goroutine and
-  kills the server. The `min="60"` attribute is a browser hint with no
-  server-side counterpart.
-- **Fix:** Default and floor `ScanIntervalSec` in `Validate()`; reject
-  out-of-range values in `POST /api/scanner/config`.
+*#36 closed 2026-09-04.*
 
 ### 37. Arbitrary File Write via Unvalidated Paths
 
@@ -347,6 +390,12 @@ written 2026-02-27 and was not re-verified against the code before this review.
     `ScanAll`, `scanDirectory`, `createJobForFile`, `handleNewFile` and
     `periodicScan` do not. `GetConfig()` returns the live pointer to the JSON
     encoder.
+    **Confirmed, not just theorized:** a #36 regression test that started
+    and stopped a live scanner across repeated `POST /api/scanner/config`
+    calls tripped this under `-race` immediately — `periodicScan` at
+    `scanner.go:886` racing a concurrent `UpdateConfig` write. Removed from
+    that test rather than fixed there, since it's this ticket's bug, not
+    #36's — see #36's own entry above for the reproduction shape.
   - **`Scanner.Stop()` sets `s.stopCh = nil`** while `watchFiles` and
     `periodicScan` are selecting on that field. A goroutine that reads the nil
     blocks forever, deadlocking `Stop`'s own `wg.Wait()`. Reachable from the
@@ -554,19 +603,19 @@ that gate never reached.
 
 | Priority | Open | Resolved |
 |----------|------|----------|
-| 🔴 Critical | 2 | 5 |
+| 🔴 Critical | 1 | 6 |
 | 🟠 High | 3 | 12 |
 | 🟡 Medium | 5 | 7 |
 | 🟢 Low | 3 | 17 |
-| **Total** | **13** | **41** |
+| **Total** | **12** | **42** |
 
 ---
 
 ## Suggested Order
 
-1. ~~**#35**~~, ~~**#38**~~, ~~**#39**~~, ~~**#40**~~, ~~**#41**~~, ~~**#42**~~ — done.
-2. **#36, #37** — process crash and the arbitrary-write path.
-3. **#43** (with its race test), then **#44**, **#45**.
+1. ~~**#35**~~, ~~**#36**~~, ~~**#38**~~, ~~**#39**~~, ~~**#40**~~, ~~**#41**~~, ~~**#42**~~ — done.
+2. **#37** — the arbitrary-write path.
+3. **#43** (with its race test — now with a confirmed reproduction, see #43), then **#44**, **#45**.
 4. **#46, #47, #48, #49**.
 5. **#50**, then **#51** (which depends on #43), **#52**, **#53**.
 

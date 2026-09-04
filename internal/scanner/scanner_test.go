@@ -27,6 +27,35 @@ func TestIsInDirectory(t *testing.T) {
 	}
 }
 
+// TestScannerConfigValidateFloorsScanInterval covers #36: Validate() must
+// never leave ScanIntervalSec at a value time.NewTicker would panic on.
+func TestScannerConfigValidateFloorsScanInterval(t *testing.T) {
+	cases := []struct {
+		name  string
+		input int
+		want  int
+	}{
+		{"zero — the cleared-field-in-the-UI case", 0, DefaultScanIntervalSec},
+		{"negative", -5, DefaultScanIntervalSec},
+		{"below the floor", 30, DefaultScanIntervalSec},
+		{"exactly the floor", MinScanIntervalSec, MinScanIntervalSec},
+		{"comfortably above the floor", 900, 900},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &ScannerConfig{ScanIntervalSec: tc.input}
+			c.Validate()
+			if c.ScanIntervalSec != tc.want {
+				t.Errorf("Validate() with ScanIntervalSec=%d left it at %d, want %d",
+					tc.input, c.ScanIntervalSec, tc.want)
+			}
+			if c.ScanIntervalSec <= 0 {
+				t.Fatalf("Validate() left ScanIntervalSec at %d — time.NewTicker would panic on this", c.ScanIntervalSec)
+			}
+		})
+	}
+}
+
 func TestMatchesPatterns(t *testing.T) {
 	s := &Scanner{}
 	watchDir := WatchDirectory{
