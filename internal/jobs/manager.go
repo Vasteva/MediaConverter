@@ -1039,7 +1039,8 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 
 	// 2. Premium Feature: AI Adaptive Encoding
 	crf := m.config.CRF
-	if m.config.IsPremium && m.ai != nil {
+	defaultCRF := crf
+	if m.config.IsPremium && m.ai != nil && !m.config.OverrideAICRF {
 		cleaner := meta.NewCleaner(m.ai)
 		log.Printf("[Premium] AI analyzing media for optimal encoding settings...")
 		t0Enc := time.Now()
@@ -1047,17 +1048,34 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 		// REMUX with 48 streams the raw JSON is tens of kilobytes that bury the
 		// few facts the decision actually turns on.
 		if suggestedCRF, err := cleaner.AnalyzeEncoding(job.ctx, info.EncodingSummary()); err == nil {
-			log.Printf("[Job %s] AI suggested CRF %d (system default %d)", job.ID, suggestedCRF, crf)
-			defaultCRF := crf
-			crf = suggestedCRF
-			m.appendAILog(job, AILog{
-				Timestamp:  t0Enc,
-				Operation:  "encoding_analysis",
-				Provider:   m.ai.GetName(),
-				Detail:     fmt.Sprintf("Suggested CRF %d (system default: %d)", suggestedCRF, defaultCRF),
-				DurationMs: time.Since(t0Enc).Milliseconds(),
-				Success:    true,
-			})
+			// A suggestion more indulgent than the configured default on a
+			// source already in this pipeline's target codec is how a REMUX
+			// got re-encoded at CRF 20 — near-transparent — and inflated
+			// instead of shrunk. Refuse it rather than trust it blindly.
+			if media.ShouldRefuseCRFSuggestion(info.CodecName, suggestedCRF, defaultCRF) {
+				log.Printf("[Job %s] Ignoring AI CRF suggestion %d — more indulgent than the configured default %d on an already-%s source",
+					job.ID, suggestedCRF, defaultCRF, strings.ToUpper(info.CodecName))
+				m.appendAILog(job, AILog{
+					Timestamp: t0Enc,
+					Operation: "encoding_analysis",
+					Provider:  m.ai.GetName(),
+					Detail: fmt.Sprintf("Suggested CRF %d refused — more indulgent than the configured default %d on an already-%s source",
+						suggestedCRF, defaultCRF, strings.ToUpper(info.CodecName)),
+					DurationMs: time.Since(t0Enc).Milliseconds(),
+					Success:    true,
+				})
+			} else {
+				log.Printf("[Job %s] AI suggested CRF %d (system default %d)", job.ID, suggestedCRF, defaultCRF)
+				crf = suggestedCRF
+				m.appendAILog(job, AILog{
+					Timestamp:  t0Enc,
+					Operation:  "encoding_analysis",
+					Provider:   m.ai.GetName(),
+					Detail:     fmt.Sprintf("Suggested CRF %d (system default: %d)", suggestedCRF, defaultCRF),
+					DurationMs: time.Since(t0Enc).Milliseconds(),
+					Success:    true,
+				})
+			}
 		} else {
 			// Not an error condition: the configured CRF is a perfectly good
 			// answer, and this path is taken whenever the model declines to
@@ -1074,6 +1092,15 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 				Error:      err.Error(),
 			})
 		}
+	} else if m.config.IsPremium && m.ai != nil && m.config.OverrideAICRF {
+		log.Printf("[Job %s] AI CRF override enabled — using configured CRF %d", job.ID, crf)
+		m.appendAILog(job, AILog{
+			Timestamp: time.Now(),
+			Operation: "encoding_analysis",
+			Provider:  "System",
+			Detail:    fmt.Sprintf("AI CRF override enabled — using configured CRF %d", crf),
+			Success:   true,
+		})
 	}
 
 	job.mu.RLock()

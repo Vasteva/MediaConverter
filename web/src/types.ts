@@ -62,6 +62,7 @@ export interface SystemConfig {
     planName?: string;
     verifyOutput?: boolean;
     deleteSource?: boolean;
+    overrideAICRF?: boolean; // true = use the configured CRF, skip the AI suggestion
     subtitleMode?: 'always' | 'selective' | 'never';
     subtitleLang?: string;
     subtitleApiKey?: string;

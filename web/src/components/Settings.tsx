@@ -148,7 +148,8 @@ export default function Settings({ config: initialConfig, onConfigUpdate, token 
                                 <select
                                     className="input select"
                                     disabled={!isPremium || isSaving}
-                                    value={isPremium ? "enabled" : "disabled"}
+                                    value={config.overrideAICRF ? "disabled" : "enabled"}
+                                    onChange={(e) => handleSave({ overrideAICRF: e.target.value === "disabled" })}
                                 >
                                     <option value="disabled">Disabled (Fixed CRF)</option>
                                     <option value="enabled">Enabled (AI Analysis)</option>

@@ -416,6 +416,7 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			"verifyOutput":        cfg.VerifyOutput,
 			"deleteSource":        cfg.DeleteSource,
 			"autoConvertISO":      cfg.AutoConvertISO,
+			"overrideAICRF":       cfg.OverrideAICRF,
 			"subtitleMode":        cfg.SubtitleMode,
 			"subtitleLang":        cfg.SubtitleLang,
 			"subtitleApiKey":      subtitleAPIKey,
@@ -437,6 +438,7 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			VerifyOutput     *bool                      `json:"verifyOutput"`
 			DeleteSource     *bool                      `json:"deleteSource"`
 			AutoConvertISO   *bool                      `json:"autoConvertISO"`
+			OverrideAICRF    *bool                      `json:"overrideAICRF"`
 			SubtitleMode     string                     `json:"subtitleMode"`
 			SubtitleLang     string                     `json:"subtitleLang"`
 			SubtitleAPIKey   string                     `json:"subtitleApiKey"`
@@ -487,6 +489,9 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		}
 		if req.AutoConvertISO != nil {
 			cfg.AutoConvertISO = *req.AutoConvertISO
+		}
+		if req.OverrideAICRF != nil {
+			cfg.OverrideAICRF = *req.OverrideAICRF
 		}
 
 		// Subtitle settings

@@ -245,6 +245,17 @@ type SkipEncodeError struct {
 
 func (e *SkipEncodeError) Error() string { return e.Reason }
 
+// isHEVCOrAV1 reports whether codec is one of the codecs this pipeline's own
+// output uses — HEVC, or the comparably efficient AV1.
+func isHEVCOrAV1(codec string) bool {
+	switch strings.ToLower(codec) {
+	case "hevc", "h265", "av1":
+		return true
+	default:
+		return false
+	}
+}
+
 // IsAlreadyEfficient reports whether a source encoded in codec, with the
 // given bits-per-pixel-per-frame density, is efficient enough that
 // re-encoding it again is not worth the generational quality loss.
@@ -254,12 +265,22 @@ func (e *SkipEncodeError) Error() string { return e.Reason }
 // efficient codec, so this only ever applies to sources already in HEVC or
 // AV1 — the codecs this pipeline itself would produce.
 func IsAlreadyEfficient(codec string, bitsPerPixel, floor float64) bool {
-	switch strings.ToLower(codec) {
-	case "hevc", "h265", "av1":
-		return bitsPerPixel > 0 && bitsPerPixel <= floor
-	default:
-		return false
-	}
+	return isHEVCOrAV1(codec) && bitsPerPixel > 0 && bitsPerPixel <= floor
+}
+
+// ShouldRefuseCRFSuggestion reports whether an AI-suggested CRF should be
+// refused in favour of the configured default.
+//
+// A suggestion more indulgent (lower CRF, bigger file) than the configured
+// default, on a source already in this pipeline's own target codec, is how a
+// REMUX got re-encoded at CRF 20 — near-transparent — and inflated instead of
+// shrunk. The AI is still trusted to suggest going more aggressive (a higher
+// CRF) than the default on such a source; only a suggestion less aggressive
+// than the operator's own baseline is refused. Sources not already in HEVC or
+// AV1 stand to gain from the codec change alone, so no suggestion is refused
+// on their account.
+func ShouldRefuseCRFSuggestion(codec string, suggestedCRF, defaultCRF int) bool {
+	return isHEVCOrAV1(codec) && suggestedCRF < defaultCRF
 }
 
 // CheckSourceSupported reports whether a source can be transcoded correctly

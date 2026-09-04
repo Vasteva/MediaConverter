@@ -89,6 +89,12 @@ type Config struct {
 	DeleteSource   bool `json:"deleteSource"`   // Default: false
 	AutoConvertISO bool `json:"autoConvertISO"` // Default: false
 
+	// OverrideAICRF forces the configured CRF and skips the AI adaptive
+	// encoding suggestion entirely, even when premium and an AI provider are
+	// configured. Default off: existing premium+AI installs keep today's
+	// behaviour until they opt out.
+	OverrideAICRF bool `json:"overrideAICRF"` // Default: false
+
 	// SavingsFloor is the minimum fraction (0.15 == 15%) an output must be
 	// smaller than its source to be kept; below it the output is discarded and
 	// the original retained. Not yet exposed on GET/POST /api/config or the
@@ -163,6 +169,7 @@ func Load() *Config {
 		VerifyOutput:         getEnvBool("VERIFY_OUTPUT", false),
 		DeleteSource:         getEnvBool("DELETE_SOURCE", false),
 		AutoConvertISO:       getEnvBool("AUTO_CONVERT_ISO", false),
+		OverrideAICRF:        getEnvBool("OVERRIDE_AI_CRF", false),
 		SavingsFloor:         getEnvFloat("SAVINGS_FLOOR", 0.15),
 		DensityFloor:         getEnvFloat("DENSITY_FLOOR", media.DefaultDensityFloor),
 		ReplaceInPlace:       getEnvBool("REPLACE_IN_PLACE", false),
@@ -248,6 +255,7 @@ func (c *Config) loadFromDisk() error {
 	m.boolean(&c.VerifyOutput, importJSON.VerifyOutput, present("verifyOutput"), "VERIFY_OUTPUT", "verifyOutput")
 	m.boolean(&c.DeleteSource, importJSON.DeleteSource, present("deleteSource"), "DELETE_SOURCE", "deleteSource")
 	m.boolean(&c.AutoConvertISO, importJSON.AutoConvertISO, present("autoConvertISO"), "AUTO_CONVERT_ISO", "autoConvertISO")
+	m.boolean(&c.OverrideAICRF, importJSON.OverrideAICRF, present("overrideAICRF"), "OVERRIDE_AI_CRF", "overrideAICRF")
 	m.float(&c.SavingsFloor, importJSON.SavingsFloor, present("savingsFloor"), "SAVINGS_FLOOR", "savingsFloor")
 	m.float(&c.DensityFloor, importJSON.DensityFloor, present("densityFloor"), "DENSITY_FLOOR", "densityFloor")
 

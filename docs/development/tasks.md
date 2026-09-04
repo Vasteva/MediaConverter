@@ -4,19 +4,18 @@
 
 ## 📋 Executive Summary
 
-Sixteen open issues, from a full source review on 2026-09-04 combined with findings
-from production testing on 2026-09-03. #35, #38, and #39 closed the same day they
-were filed.
+Fifteen open issues, from a full source review on 2026-09-04 combined with findings
+from production testing on 2026-09-03. #35, #38, #39, and #40 closed the same day
+they were filed.
 
 The media pipeline itself — `internal/media` (ffmpeg, progress, validate) and
 `internal/ai/meta` — is in good shape and holds up under review. The open work is
 concentrated in two places:
 
-- **Nothing else stops a job from making a file worse.** An AI CRF suggestion
-  that cannot be switched off, and a resolution filter that only applies to
-  scanner jobs (#40–#42). Production testing found real files inflated by
-  re-encoding already-efficient HEVC — the codec/bitrate filter that would
-  have caught it (#39) is now closed.
+- **Nothing else stops a job from making a file worse.** A resolution filter
+  that only applies to scanner jobs (#41–#42). Production testing found real
+  files inflated by an AI CRF suggestion with no opt-out and by re-encoding
+  already-efficient HEVC — both #39 and #40 are now closed.
 - **Shared mutable state is unsynchronised.** `config.Config` has no mutex at all
   while the API mutates it under running workers (#43).
 
@@ -26,6 +25,43 @@ written 2026-02-27 and was not re-verified against the code before this review.
 ---
 
 ## ✅ Closed Today
+
+### 40. AI CRF Suggestion Cannot Be Switched Off
+
+- **Status:** ✅ Resolved (2026-09-04)
+- **File:** `internal/config/config.go`; `internal/media/validate.go`;
+  `internal/jobs/manager.go`; `internal/api/routes.go`;
+  `web/src/types.ts`; `web/src/components/Settings.tsx`
+- **Details:** Adaptive CRF was gated only on `m.config.IsPremium && m.ai !=
+  nil`, with no opt-out. It selected CRF 20 — near-transparent — on a REMUX,
+  which guarantees inflation.
+- **Fix:**
+  - Added `Config.OverrideAICRF` (default `false`, env `OVERRIDE_AI_CRF`),
+    plumbed through `GET`/`POST /api/config` — unlike #38/#39's floor
+    fields, this one's own fix explicitly called for full API/UI exposure
+    now rather than deferring to #51, so it got it.
+  - The Settings page already had an "Adaptive Encoding" dropdown with the
+    right two options, but it was dead: no `onChange` handler, and its
+    `value` was derived from `isPremium` rather than any real config field,
+    so selecting an option never did anything for anyone, premium or not.
+    Wired it to `overrideAICRF` instead of adding a second control.
+  - `runOptimizationFromPath` now skips the AI suggestion step entirely
+    when `OverrideAICRF` is set, logging why, before any AI call is made.
+  - Also implemented the "consider" in the original fix note: added
+    `media.ShouldRefuseCRFSuggestion(codec, suggested, default)` — refuses
+    an AI suggestion more indulgent (lower CRF) than the configured default
+    on a source already in HEVC/AV1, the exact shape of the reported REMUX
+    failure, while still trusting a suggestion to go more aggressive. Kept
+    as a pure, unit-tested function alongside #39's `IsAlreadyEfficient`,
+    sharing its codec-identity check (`isHEVCOrAV1`).
+- **Tests:** `TestShouldRefuseCRFSuggestion` (media package). Full
+  `internal/config`, `internal/media`, `internal/jobs`, `internal/api`
+  suites re-run with `-race -count=1`: all pass. `go vet ./...` and `go
+  build ./...` clean. Frontend: `npm run build` (tsc + vite) and `npm run
+  lint` both clean. Manually verified end-to-end against a running
+  `go run ./cmd/server` + the built frontend: toggled the Settings dropdown
+  both directions, confirmed `POST /api/config` persisted `overrideAICRF`
+  and a reload of `GET /api/config` read it back correctly into the UI.
 
 ### 39. Already-Efficient Sources Are Re-Encoded
 
@@ -198,20 +234,8 @@ written 2026-02-27 and was not re-verified against the code before this review.
 
 ## 🟠 High — Output Quality
 
-*All five found during production testing, 2026-09-03; #38 and #39 closed 2026-09-04.*
-
-### 40. AI CRF Suggestion Cannot Be Switched Off
-
-- **Status:** 🟠 Open
-- **File:** `internal/jobs/manager.go`
-- **Details:** Adaptive CRF at `:971` is gated only on
-  `m.config.IsPremium && m.ai != nil`, with no opt-out. It selected CRF 20 —
-  near-transparent — on a REMUX, which guarantees inflation. `ExtractCRF`'s
-  accepted band is 14–34, so 20 passes validation.
-- **Fix:** Add an explicit config flag (default off) plumbed through `Config`,
-  `GET`/`POST /api/config`, and the Settings UI, so a fixed global CRF is
-  selectable. Consider also refusing a suggestion lower than the configured CRF
-  on an already-efficient source.
+*All five found during production testing, 2026-09-03; #38, #39, and #40 closed
+2026-09-04.*
 
 ### 41. `skipHighResolution` Does Not Apply to Manual Jobs
 
@@ -374,8 +398,9 @@ written 2026-02-27 and was not re-verified against the code before this review.
   - Readable but not settable outside the setup wizard: `SourceDir`, `DestDir`,
     `GPUVendor`.
   - New fields from this review that must land here too: savings floor (#38),
-    AI CRF toggle (#40), bitrate-density filter (#39), `skipHighResolution` and
-    its threshold once moved (#41).
+    bitrate-density filter (#39), `skipHighResolution` and its threshold once
+    moved (#41). The AI CRF toggle (#40) already landed here as part of its
+    own fix rather than waiting on this ticket.
 - **Fix:** For each field decide runtime-settable, restart-required, or
   deliberately env-only, and show that state in the UI rather than silently
   ignoring input.
@@ -467,17 +492,17 @@ that gate never reached.
 | Priority | Open | Resolved |
 |----------|------|----------|
 | 🔴 Critical | 2 | 5 |
-| 🟠 High | 6 | 9 |
+| 🟠 High | 5 | 10 |
 | 🟡 Medium | 5 | 7 |
 | 🟢 Low | 3 | 17 |
-| **Total** | **16** | **38** |
+| **Total** | **15** | **39** |
 
 ---
 
 ## Suggested Order
 
-1. ~~**#35**~~, ~~**#38**~~, ~~**#39**~~ — done.
-2. **#40, #41, #42** — everything actively making files worse.
+1. ~~**#35**~~, ~~**#38**~~, ~~**#39**~~, ~~**#40**~~ — done.
+2. **#41, #42** — everything actively making files worse.
 3. **#36, #37** — process crash and the arbitrary-write path.
 4. **#43** (with its race test), then **#44**, **#45**.
 5. **#46, #47, #48, #49**.

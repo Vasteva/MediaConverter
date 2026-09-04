@@ -253,6 +253,34 @@ func TestIsAlreadyEfficient(t *testing.T) {
 	}
 }
 
+// TestShouldRefuseCRFSuggestion covers #40: an AI CRF suggestion more
+// indulgent than the configured default, on a source already in this
+// pipeline's target codec, should be refused.
+func TestShouldRefuseCRFSuggestion(t *testing.T) {
+	cases := []struct {
+		name                     string
+		codec                    string
+		suggestedCRF, defaultCRF int
+		want                     bool
+	}{
+		{"HEVC suggestion more indulgent than default is refused", "hevc", 20, 23, true},
+		{"HEVC suggestion equal to default is trusted", "hevc", 23, 23, false},
+		{"HEVC suggestion more aggressive than default is trusted", "hevc", 28, 23, false},
+		{"AV1 suggestion more indulgent than default is refused", "av1", 20, 23, true},
+		{"H.264 suggestion more indulgent than default is still trusted", "h264", 20, 23, false},
+		{"unknown codec is trusted", "", 20, 23, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ShouldRefuseCRFSuggestion(tc.codec, tc.suggestedCRF, tc.defaultCRF)
+			if got != tc.want {
+				t.Errorf("ShouldRefuseCRFSuggestion(%q, %d, %d) = %v, want %v",
+					tc.codec, tc.suggestedCRF, tc.defaultCRF, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestTranscodeWithProgressCallback(t *testing.T) {
 	wrapper, err := NewFFmpegWrapper()
 	if err != nil {
