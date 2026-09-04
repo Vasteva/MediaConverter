@@ -324,8 +324,17 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 
 		destPath := req.DestPath
 		if destPath != "" {
-			// If destination is specified, clean it
-			destPath = filepath.Clean(destPath)
+			// Security: validate the destination too — this used to be a bare
+			// filepath.Clean, which resolves ".." lexically but places no
+			// bound on where the result actually lands. Both SourceDir and
+			// DestDir are allowed: an explicit destination writing back
+			// beside its source is exactly what happens below when none is
+			// given (#37).
+			validDest, err := security.ValidatePath(destPath, cfg.SourceDir, cfg.DestDir)
+			if err != nil {
+				return c.Status(403).JSON(fiber.Map{"error": err.Error()})
+			}
+			destPath = validDest
 			// Check if it's a directory - if so, use source filename
 			if info, err := os.Stat(destPath); err == nil && info.IsDir() {
 				destPath = filepath.Join(destPath, filepath.Base(sourcePath))

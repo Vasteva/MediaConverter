@@ -21,6 +21,9 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install dependencies and MakeMKV
+# util-linux provides setpriv, which docker-entrypoint.sh uses to drop root
+# before running vastiva (#37) — installed explicitly rather than assumed
+# present, even though it's part of Ubuntu's base system.
 RUN apt-get update && apt-get install -y \
     software-properties-common \
     && add-apt-repository ppa:heyarje/makemkv-beta \
@@ -35,6 +38,7 @@ RUN apt-get update && apt-get install -y \
     i965-va-driver-shaders \
     ca-certificates \
     curl \
+    util-linux \
     makemkv-bin makemkv-oss \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /data /storage /output
@@ -43,16 +47,22 @@ WORKDIR /app
 
 # Copy single binary from go-builder
 COPY --from=go-builder /app/vastiva /app/vastiva
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # Set environment
-ENV PORT=80
+# PORT is unprivileged (>1024): the entrypoint drops root before vastiva
+# binds it, and only root/CAP_NET_BIND_SERVICE can bind <1024. Map the host
+# port you want in docker-compose.yml's "ports:" instead of changing this.
+ENV PORT=8080
 ENV SOURCE_DIR=/storage
 ENV DEST_DIR=/output
 ENV SCANNER_PROCESSED_FILE=/data/processed.json
 
-EXPOSE 80
+EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:80/api/health || exit 1
+    CMD curl -f http://localhost:8080/api/health || exit 1
 
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["/app/vastiva"]

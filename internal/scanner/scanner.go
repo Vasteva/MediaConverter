@@ -16,6 +16,7 @@ import (
 
 	"github.com/Vasteva/MediaConverter/internal/jobs"
 	"github.com/Vasteva/MediaConverter/internal/media"
+	"github.com/Vasteva/MediaConverter/internal/security"
 	"github.com/Vasteva/MediaConverter/internal/util"
 	"github.com/fsnotify/fsnotify"
 )
@@ -1020,6 +1021,15 @@ func (s *Scanner) QueueFile(path string) error {
 	s.mu.RLock()
 	cfg := s.config
 	s.mu.RUnlock()
+
+	// Security: unlike a file createJobForFile discovers itself (already
+	// confined to a configured watch directory), this path arrives raw from
+	// POST /api/scanner/queue with no validation at all (#37).
+	validPath, err := security.ValidatePath(path, s.jobManager.GetConfig().SourceDir)
+	if err != nil {
+		return err
+	}
+	path = validPath
 
 	ext := strings.ToLower(filepath.Ext(path))
 	var jobType jobs.JobType

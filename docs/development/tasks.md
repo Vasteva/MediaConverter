@@ -4,10 +4,12 @@
 
 ## 📋 Executive Summary
 
-Twelve open issues, from a full source review on 2026-09-04 combined with findings
-from production testing on 2026-09-03. #35, #36, and #38–#42 — everything found in
-production testing plus the settings-page crash — closed the same day they were
-filed.
+Eleven open issues, from a full source review on 2026-09-04 combined with findings
+from production testing on 2026-09-03. #35 and #36–#42 closed the same day they
+were filed — every Critical item and everything found in production testing.
+#37's code-level fix is done and tested; its Docker/entrypoint half still needs a
+deploy-and-verify pass on the homelab host before it can be trusted (no Docker on
+the dev machine this was built on — see its entry above).
 
 The media pipeline itself — `internal/media` (ffmpeg, progress, validate) and
 `internal/ai/meta` — is in good shape and holds up under review. The remaining open
@@ -24,6 +26,77 @@ written 2026-02-27 and was not re-verified against the code before this review.
 ---
 
 ## ✅ Closed Today
+
+### 37. Arbitrary File Write via Unvalidated Paths
+
+- **Status:** ✅ Resolved (2026-09-04)
+- **File:** `internal/security/security.go`; `internal/api/routes.go`;
+  `internal/scanner/scanner.go`; `internal/util/ownership.go`;
+  `Dockerfile`; `Dockerfile.nvidia`; `docker-entrypoint.sh` (new);
+  `docker-compose.yml`; `.env.example`; `deploy.sh`
+- **Details:** Three validation gaps, compounded by the deployment shape —
+  internet-facing through Traefik, container running as root.
+  - `POST /api/jobs` validated `sourcePath` but only `filepath.Clean`d
+    `destinationPath`. Output could be written anywhere the container could
+    reach.
+  - `POST /api/scanner/queue` → `Scanner.QueueFile` took the raw path with
+    no validation at all.
+  - `security.ValidatePath` never resolved symlinks, so a symlink inside an
+    allowed directory could point anywhere and still read as contained —
+    `filepath.Clean` is purely lexical, it never touches the filesystem.
+- **Fix:**
+  - `ValidatePath` now resolves both the target and each candidate base
+    through a new `resolveSymlinks` helper before the containment check.
+    `filepath.EvalSymlinks` requires every path component to exist, which a
+    destination file being created for the first time never does;
+    `resolveSymlinks` walks up to the nearest existing ancestor, resolves
+    that, and rejoins the not-yet-existing tail, so a brand-new output path
+    is still checked against where its parent directory actually points.
+  - `POST /api/jobs`'s `destinationPath` is now run through `ValidatePath`
+    against `{SourceDir, DestDir}` — both, since the no-destination-given
+    default already writes back beside the source.
+  - `Scanner.QueueFile` validates its path against `SourceDir` before doing
+    anything else with it, closing the gap for both its direct callers and
+    `POST /api/scanner/queue`.
+  - **Root, the fourth and largest piece:** added `docker-entrypoint.sh`,
+    run as root only long enough to `chown` `/data` (including files
+    already there from before this change — critical for the upgrade path)
+    and read the GPU render node's group (host-dependent, not knowable at
+    build time), then `exec setpriv` into the `vastiva` binary as
+    PUID:PGID directly. Chosen over the alternative (stay some fixed
+    identity, chown output after the fact) because it also resolves the
+    tension with the existing PUID/PGID feature almost for free: a process
+    that *runs as* PUID:PGID owns everything it writes from the moment of
+    creation, with no `CAP_CHOWN` grant needed, rather than a process that
+    writes as one identity and needs elevated privilege to hand files to
+    another. `internal/util/ownership.go`'s `Apply()` is kept rather than
+    removed — it's a same-owner no-op in the now-common case, but still the
+    only path to correct ownership when PUID/PGID aren't set (fixed
+    1000:1000 fallback) or don't match a particular write.
+    `PORT` moved to 8080 (root is required to bind <1024, and the whole
+    point is not being root); `docker-compose.yml`'s external `8091` and
+    the Traefik label are updated to match internally, so this is invisible
+    from outside the container.
+- **Not done:** couldn't be verified by actually building or running either
+  Dockerfile — no Docker on this dev machine (see
+  `vastiva-homelab-deployment` project memory). Verified everything short
+  of that: `sh -n`/`dash -n` on the entrypoint script, and the exact
+  `setpriv` invocation run locally (fails on `setgroups: Operation not
+  permitted` when unprivileged, which is the *expected* failure mode for
+  flags that parsed correctly and are attempting the real privileged
+  syscall — a syntax error would have failed differently, at option
+  parsing). **This needs a real deploy-and-verify pass on the homelab host**
+  before being trusted: confirm the container starts, `/data` and newly
+  written output land owned by the configured PUID/PGID, VAAPI still works
+  for the Arc A310, and the health check passes on the new port.
+- **Tests:** `TestValidatePathResolvesSymlinks` (an existing symlink
+  escaping the sandbox is rejected; one pointing back inside is accepted;
+  a not-yet-existing path behind an escaping symlink is still rejected; the
+  allowed base itself being a symlink still resolves correctly) plus the
+  full existing `TestValidatePath` table, unchanged and still passing.
+  `TestPostJobsValidatesDestinationPath`, `TestPostScannerQueueValidatesPath`
+  (first tests of these two routes), `TestQueueFileValidatesPath`. Full
+  `-race` suite, `go vet ./...`, `go build ./...`, `gofmt -l .` clean.
 
 ### 36. `time.NewTicker(0)` Panic Takes Down the Process
 
@@ -349,27 +422,7 @@ written 2026-02-27 and was not re-verified against the code before this review.
 
 ---
 
-## 🔴 Critical
-
-*#36 closed 2026-09-04.*
-
-### 37. Arbitrary File Write via Unvalidated Paths
-
-- **Status:** 🔴 Open
-- **File:** `internal/api/routes.go`; `internal/scanner/scanner.go`; `internal/security/security.go`; `Dockerfile`
-- **Details:** Three gaps, compounded by the deployment shape — this instance is
-  internet-facing through Traefik and the container runs as root.
-  - `POST /api/jobs` validates `sourcePath` (`routes.go:304`) but only
-    `filepath.Clean`s `destinationPath` (`:309-323`). Output can be written
-    anywhere the container can reach.
-  - `POST /api/scanner/queue` → `Scanner.QueueFile` (`scanner.go:960`) takes the
-    raw path with no validation at all.
-  - `security.ValidatePath` never resolves symlinks — no `EvalSymlinks` anywhere
-    in the repo — so a symlink inside the library escapes the sandbox.
-- **Note:** `docs/security/audit.md` VAST-001 states this is fixed for source
-  *and* destination. It is not. See #52.
-- **Fix:** Validate the destination and the queue path; add `EvalSymlinks`; add a
-  non-root `USER` to `Dockerfile` and `Dockerfile.nvidia`.
+*#36 and #37 — every Critical item found in this review — closed 2026-09-04.*
 
 ---
 
@@ -524,14 +577,18 @@ written 2026-02-27 and was not re-verified against the code before this review.
 - **File:** `docs/security/audit.md`; `README.md`; `.env.example`
 - **Details:**
   - `audit.md` VAST-001 claims path traversal is fixed for source and
-    destination; the destination is unvalidated (#37). VAST-005 describes the
-    token as "HMAC-SHA256" (it is plain SHA-256) and the login limit as "10
-    attempts per minute" (the code uses 5). An overstating security document is
-    worse than none.
+    destination — as of #37 (2026-09-04) that claim is now actually true,
+    but the document should still be checked against the rest of what it
+    asserts rather than trusted on the strength of one now-correct line.
+    VAST-005 describes the token as "HMAC-SHA256" (it is plain SHA-256) and
+    the login limit as "10 attempts per minute" (the code uses 5). An
+    overstating security document is worse than none.
   - `README.md` advertises Whisper speech-to-text subtitles; the implementation
     is an OpenSubtitles *download*. Its structure tree shows
-    `internal/ai/subtitles/`, which is `internal/subtitles/`. Its `PORT` default
-    disagrees with `config.go`.
+    `internal/ai/subtitles/`, which is `internal/subtitles/`. Its `PORT`
+    default (`80`) disagreed with `config.go`'s (`8080`) even before #37;
+    now the Docker image's default has moved to match `config.go`, so
+    README is further out of date, not closer.
   - `.env.example` sets `SCANNER_CONFIG_FILE=/data/scanner-config.json`; `main.go`
     defaults to `scanner_config.json`, and `docker-compose.yml` does not pass the
     variable at all.
@@ -603,21 +660,22 @@ that gate never reached.
 
 | Priority | Open | Resolved |
 |----------|------|----------|
-| 🔴 Critical | 1 | 6 |
+| 🔴 Critical | 0 | 7 |
 | 🟠 High | 3 | 12 |
 | 🟡 Medium | 5 | 7 |
 | 🟢 Low | 3 | 17 |
-| **Total** | **12** | **42** |
+| **Total** | **11** | **43** |
 
 ---
 
 ## Suggested Order
 
-1. ~~**#35**~~, ~~**#36**~~, ~~**#38**~~, ~~**#39**~~, ~~**#40**~~, ~~**#41**~~, ~~**#42**~~ — done.
-2. **#37** — the arbitrary-write path.
-3. **#43** (with its race test — now with a confirmed reproduction, see #43), then **#44**, **#45**.
-4. **#46, #47, #48, #49**.
-5. **#50**, then **#51** (which depends on #43), **#52**, **#53**.
+1. ~~**#35**~~, ~~**#36**~~, ~~**#37**~~, ~~**#38**~~, ~~**#39**~~, ~~**#40**~~,
+   ~~**#41**~~, ~~**#42**~~ — done. **#37 still needs a deploy-and-verify pass
+   on the homelab host** — see its entry above.
+2. **#43** (with its race test — now with a confirmed reproduction, see #43), then **#44**, **#45**.
+3. **#46, #47, #48, #49**.
+4. **#50**, then **#51** (which depends on #43), **#52**, **#53**.
 
 ---
 

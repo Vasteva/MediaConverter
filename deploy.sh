@@ -25,7 +25,7 @@ if [ ! -f "$ENV_FILE" ]; then
     echo "Creating .env file from template..."
     cat > "$ENV_FILE" << 'EOF'
 # Vastiva Media Converter Configuration
-PORT=80
+PORT=8080
 SOURCE_DIR=/storage
 DEST_DIR=/output
 GPU_VENDOR=cpu

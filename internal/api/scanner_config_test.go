@@ -16,8 +16,10 @@ import (
 
 // newTestApp wires a real Manager and Scanner against temp-dir files, so
 // RegisterRoutes' handlers run against the same objects a live server would
-// use rather than mocks.
-func newTestApp(t *testing.T) (*fiber.App, string) {
+// use rather than mocks. Returns the app, a valid auth token, and the temp
+// directory used as both SourceDir and DestDir, for tests that need to
+// construct a path known to be inside (or outside) the sandbox.
+func newTestApp(t *testing.T) (*fiber.App, string, string) {
 	t.Helper()
 	dir := t.TempDir()
 
@@ -46,7 +48,7 @@ func newTestApp(t *testing.T) (*fiber.App, string) {
 
 	app := fiber.New()
 	RegisterRoutes(app, jm, fs, cfg)
-	return app, GenerateToken(cfg.AdminPassword)
+	return app, GenerateToken(cfg.AdminPassword), dir
 }
 
 // TestPostScannerConfigRejectsLowScanInterval covers #36: the API must
@@ -62,7 +64,7 @@ func newTestApp(t *testing.T) (*fiber.App, string) {
 // itself never receives a bad interval is proven directly and
 // deterministically by TestScannerConfigValidateFloorsScanInterval instead.
 func TestPostScannerConfigRejectsLowScanInterval(t *testing.T) {
-	app, token := newTestApp(t)
+	app, token, _ := newTestApp(t)
 
 	cases := []struct {
 		name       string

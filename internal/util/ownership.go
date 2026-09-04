@@ -12,15 +12,14 @@ const OwnershipDisabled = -1
 // FileOwnership records the uid and gid that files written by this process
 // should carry.
 //
-// The container runs as root, so anything it writes into a media library lands
-// as root:root while the library itself is owned by a real user. That makes the
-// files unmanageable from outside the container — the reason the output
-// directory could not be cleaned up without elevation.
-//
-// This sets ownership on files after they are written rather than dropping the
-// process's privileges. It matches what PUID/PGID achieve for the user (files
-// owned correctly) without the re-exec that a full privilege drop requires; the
-// stronger option is to run the whole container as a non-root user.
+// As of #37 the container's entrypoint drops root and runs this process as
+// PUID:PGID directly, so files it writes are correctly owned from the
+// moment they're created — Apply below is a same-owner no-op in that,
+// now-common, case. It still exists for two reasons: the entrypoint falls
+// back to a fixed non-root uid when PUID/PGID aren't set, so a job with a
+// different explicit ownership requirement still has a path to it; and it's
+// the same call the pre-#37 root-container fallback used, before anything
+// this process wrote could be trusted to already carry the right owner.
 type FileOwnership struct {
 	UID int
 	GID int

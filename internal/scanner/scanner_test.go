@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"github.com/Vasteva/MediaConverter/internal/config"
 	"github.com/Vasteva/MediaConverter/internal/jobs"
 	"os"
 	"path/filepath"
@@ -53,6 +54,51 @@ func TestScannerConfigValidateFloorsScanInterval(t *testing.T) {
 				t.Fatalf("Validate() left ScanIntervalSec at %d — time.NewTicker would panic on this", c.ScanIntervalSec)
 			}
 		})
+	}
+}
+
+// TestQueueFileValidatesPath covers #37: QueueFile takes a raw path
+// straight from POST /api/scanner/queue with no other gate — unlike a file
+// createJobForFile discovers itself, already confined to a configured watch
+// directory — so it must reject anything outside SourceDir on its own.
+func TestQueueFileValidatesPath(t *testing.T) {
+	dir := t.TempDir()
+	sourceDir := filepath.Join(dir, "source")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatalf("mkdir source: %v", err)
+	}
+	outside := filepath.Join(dir, "outside.mkv")
+	if err := os.WriteFile(outside, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+	inside := filepath.Join(sourceDir, "movie.mkv")
+	if err := os.WriteFile(inside, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write inside file: %v", err)
+	}
+
+	cfg := &config.Config{SourceDir: sourceDir, DestDir: filepath.Join(dir, "dest")}
+	jm, err := jobs.NewManager(cfg, nil, filepath.Join(dir, "jobs.json"))
+	if err != nil {
+		t.Fatalf("jobs.NewManager: %v", err)
+	}
+
+	scannerCfg := &ScannerConfig{
+		Mode:               ScanModeManual,
+		OptimizeExtensions: []string{".mkv"},
+		ProcessedFilePath:  filepath.Join(dir, "processed.json"),
+	}
+	scannerCfg.Validate()
+	s, err := NewScanner(scannerCfg, jm, filepath.Join(dir, "scanner_config.json"))
+	if err != nil {
+		t.Fatalf("NewScanner: %v", err)
+	}
+	t.Cleanup(s.Stop)
+
+	if err := s.QueueFile(outside); err == nil {
+		t.Error("expected QueueFile to reject a path outside SourceDir")
+	}
+	if err := s.QueueFile(inside); err != nil {
+		t.Errorf("expected QueueFile to accept a path inside SourceDir, got: %v", err)
 	}
 }
 
