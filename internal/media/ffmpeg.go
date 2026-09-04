@@ -47,6 +47,14 @@ type TranscodeOptions struct {
 	ColorPrimaries string
 	ColorTransfer  string
 	ColorSpace     string
+
+	// Source dimensions and sample aspect ratio, needed to compute an
+	// upscale target that preserves the source's display aspect ratio
+	// instead of stretching it — see getUpscaleFilter.
+	SourceWidth  int
+	SourceHeight int
+	SARNum       int
+	SARDen       int
 }
 
 // ApplySourceInfo fills the source-derived fields of opts from a probed
@@ -59,6 +67,10 @@ func (o *TranscodeOptions) ApplySourceInfo(info *MediaInfo) {
 	o.ColorPrimaries = info.ColorPrimaries
 	o.ColorTransfer = info.ColorTransfer
 	o.ColorSpace = info.ColorSpace
+	o.SourceWidth = info.VideoWidth
+	o.SourceHeight = info.VideoHeight
+	o.SARNum = info.SARNum
+	o.SARDen = info.SARDen
 }
 
 // FFmpegWrapper handles FFmpeg command execution
@@ -196,25 +208,76 @@ func targetResolution(resolution string) (int, int) {
 	return 1920, 1080
 }
 
+// upscaleTargetDimensions computes an upscale target that fits within
+// targetW×targetH while preserving the source's display aspect ratio —
+// stored width × SAR ÷ height — rather than its stored pixel dimensions.
+//
+// A bare scale=targetW:targetH ignores aspect ratio entirely: it stretches
+// whatever the source's shape is to exactly fill a square-pixel target box,
+// which distorts anamorphic sources (non-square pixels, common on DVD rips)
+// and non-16:9 sources alike. This picks whichever axis is aspect-limiting
+// and shrinks the other, so the output is never larger than the target box
+// but always correctly proportioned — no padding, so a source that isn't
+// 16:9 comes out at a non-16:9 resolution rather than letterboxed.
+//
+// sarNum/sarDen of 0 (unknown, or ffprobe's own "0:1" for it) is treated as
+// 1:1 — square pixels, i.e. today's stored-dimension behaviour — rather than
+// guessing. srcW/srcH of 0 (unprobeable) falls back to the target box as-is.
+func upscaleTargetDimensions(srcW, srcH, sarNum, sarDen, targetW, targetH int) (int, int) {
+	if srcW <= 0 || srcH <= 0 {
+		return targetW, targetH
+	}
+	if sarNum <= 0 || sarDen <= 0 {
+		sarNum, sarDen = 1, 1
+	}
+
+	dar := float64(srcW) * float64(sarNum) / (float64(srcH) * float64(sarDen))
+
+	outW := targetW
+	outH := int(float64(targetW)/dar + 0.5)
+	if outH > targetH {
+		outH = targetH
+		outW = int(float64(targetH)*dar + 0.5)
+	}
+
+	// Even dimensions: required by the 4:2:0 chroma subsampling this
+	// pipeline's HEVC output always uses.
+	if outW%2 != 0 {
+		outW++
+	}
+	if outH%2 != 0 {
+		outH++
+	}
+	return outW, outH
+}
+
 // getUpscaleFilter returns the video filter string for upscaling.
 // Must be GPU-aware: Intel/AMD decode with -hwaccel_output_format vaapi, so frames
 // are already in VAAPI GPU memory and require scale_vaapi (not the software scale filter).
+//
+// setsar=1 alone does not fix an anamorphic source — it only stops the
+// *output* from being tagged non-square, after the stretch already happened
+// during scaling. upscaleTargetDimensions computes dimensions that are
+// correct before scaling; setsar=1 here just confirms the now-correct output
+// as square-pixel rather than leaving it tagged with the source's SAR.
 func (f *FFmpegWrapper) getUpscaleFilter(opts TranscodeOptions) string {
 	if !opts.Upscale {
 		return ""
 	}
 
 	targetW, targetH := targetResolution(opts.Resolution)
+	outW, outH := upscaleTargetDimensions(opts.SourceWidth, opts.SourceHeight, opts.SARNum, opts.SARDen, targetW, targetH)
 
 	switch opts.GPUVendor {
 	case GPUVendorNvidia:
-		return fmt.Sprintf("scale_cuda=%d:%d", targetW, targetH)
+		return fmt.Sprintf("scale_cuda=%d:%d,setsar=1", outW, outH)
 	case GPUVendorIntel, GPUVendorAMD:
 		// Frames are already in VAAPI format from hwaccel; scale_vaapi operates on
-		// GPU frames directly and handles HDR/10-bit content natively.
-		return fmt.Sprintf("scale_vaapi=%d:%d", targetW, targetH)
+		// GPU frames directly and handles HDR/10-bit content natively. setsar is a
+		// metadata-only filter and passes hardware frames through untouched.
+		return fmt.Sprintf("scale_vaapi=%d:%d,setsar=1", outW, outH)
 	default:
-		return fmt.Sprintf("scale=%d:%d:flags=lanczos", targetW, targetH)
+		return fmt.Sprintf("scale=%d:%d:flags=lanczos,setsar=1", outW, outH)
 	}
 }
 
@@ -351,18 +414,19 @@ func (f *FFmpegWrapper) GetMediaInfo(ctx context.Context, path string) (*MediaIn
 			Size     string `json:"size"`
 		} `json:"format"`
 		Streams []struct {
-			CodecType        string `json:"codec_type"`
-			CodecName        string `json:"codec_name"`
-			Width            int    `json:"width"`
-			Height           int    `json:"height"`
-			PixFmt           string `json:"pix_fmt"`
-			BitsPerRawSample string `json:"bits_per_raw_sample"`
-			RFrameRate       string `json:"r_frame_rate"`
-			AvgFrameRate     string `json:"avg_frame_rate"`
-			ColorPrimaries   string `json:"color_primaries"`
-			ColorTransfer    string `json:"color_transfer"`
-			ColorSpace       string `json:"color_space"`
-			Disposition      struct {
+			CodecType         string `json:"codec_type"`
+			CodecName         string `json:"codec_name"`
+			Width             int    `json:"width"`
+			Height            int    `json:"height"`
+			PixFmt            string `json:"pix_fmt"`
+			BitsPerRawSample  string `json:"bits_per_raw_sample"`
+			RFrameRate        string `json:"r_frame_rate"`
+			AvgFrameRate      string `json:"avg_frame_rate"`
+			SampleAspectRatio string `json:"sample_aspect_ratio"`
+			ColorPrimaries    string `json:"color_primaries"`
+			ColorTransfer     string `json:"color_transfer"`
+			ColorSpace        string `json:"color_space"`
+			Disposition       struct {
 				AttachedPic int `json:"attached_pic"`
 			} `json:"disposition"`
 			SideDataList []struct {
@@ -421,6 +485,14 @@ func (f *FFmpegWrapper) GetMediaInfo(ctx context.Context, path string) (*MediaIn
 					info.FrameRate = parseFrameRate(s.RFrameRate)
 				}
 
+				// Anamorphic sources (DVD rips especially) store non-square
+				// pixels: stored width×height isn't the display aspect
+				// ratio. SARNum/SARDen come back 0 for ffprobe's "0:1"
+				// (unknown) or anything else unparseable; upscaleTargetDimensions
+				// treats that the same as an explicit "1:1" — no correction
+				// needed — rather than guessing.
+				info.SARNum, info.SARDen = parseRatio(s.SampleAspectRatio)
+
 				for _, sd := range s.SideDataList {
 					if sd.DVProfile > 0 {
 						info.DVProfile = sd.DVProfile
@@ -460,6 +532,13 @@ type MediaInfo struct {
 	PixFmt    string  // e.g. "yuv420p", "yuv420p10le"
 	BitDepth  int     // 8, 10 or 12; 0 when unknown
 	FrameRate float64 // frames per second; 0 when unknown
+
+	// SARNum/SARDen are the source's sample (pixel) aspect ratio. Both 0
+	// means unknown or square (1:1) — an anamorphic source (common on DVD
+	// rips) has non-square pixels, so its stored VideoWidth/VideoHeight
+	// ratio is not its display aspect ratio.
+	SARNum int
+	SARDen int
 
 	// Colour signalling, copied to the output so HDR content doesn't lose its
 	// metadata and render washed out.
@@ -558,6 +637,22 @@ func parseFrameRate(s string) float64 {
 		return 0
 	}
 	return n / d
+}
+
+// parseRatio parses ffprobe's "N:D" ratio format (sample_aspect_ratio,
+// display_aspect_ratio) into integers. Returns 0, 0 for anything that isn't
+// a clean, positive N:D pair — including ffprobe's own "0:1" for "unknown".
+func parseRatio(s string) (num, den int) {
+	n, d, ok := strings.Cut(s, ":")
+	if !ok {
+		return 0, 0
+	}
+	numer, err1 := strconv.Atoi(strings.TrimSpace(n))
+	denom, err2 := strconv.Atoi(strings.TrimSpace(d))
+	if err1 != nil || err2 != nil || numer <= 0 || denom <= 0 {
+		return 0, 0
+	}
+	return numer, denom
 }
 
 // IsHDR reports whether the source uses a HDR transfer function.

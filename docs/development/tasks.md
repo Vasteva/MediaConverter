@@ -4,19 +4,14 @@
 
 ## 📋 Executive Summary
 
-Fourteen open issues, from a full source review on 2026-09-04 combined with findings
-from production testing on 2026-09-03. #35, #38, #39, #40, and #41 closed the same
-day they were filed.
+Thirteen open issues, from a full source review on 2026-09-04 combined with findings
+from production testing on 2026-09-03. #35 and #38–#42 — everything found in
+production testing — closed the same day they were filed.
 
 The media pipeline itself — `internal/media` (ffmpeg, progress, validate) and
-`internal/ai/meta` — is in good shape and holds up under review. The open work is
-concentrated in two places:
+`internal/ai/meta` — is in good shape and holds up under review. The remaining open
+work is concentrated in one place:
 
-- **One output-quality gap remains: `autoUpscale`'s unsafe default and its
-  SAR-blind filter (#42).** The other four found in production testing — no
-  savings floor, no codec/bitrate filter, an unswitchable AI CRF suggestion,
-  and a resolution filter that skipped manual jobs — are now closed
-  (#38–#41).
 - **Shared mutable state is unsynchronised.** `config.Config` has no mutex at all
   while the API mutates it under running workers (#43).
 
@@ -26,6 +21,57 @@ written 2026-02-27 and was not re-verified against the code before this review.
 ---
 
 ## ✅ Closed Today
+
+### 42. `autoUpscale` Defaults On, and Upscaling Ignores SAR
+
+- **Status:** ✅ Resolved (2026-09-04)
+- **File:** `internal/media/ffmpeg.go`; `internal/scanner/scanner.go`;
+  `internal/scanner/config.go`
+- **Details:** Two separate problems behind the *Caged* 856 → 1080 result.
+  1. **Default.** `ScannerConfig.AutoUpscale` had no explicit default in
+     `Validate()` or `LoadScannerConfig`.
+  2. **Distortion.** There was no SAR handling anywhere in `internal/media` —
+     `getUpscaleFilter` emitted a bare `scale_vaapi=W:H` / `scale=W:H`, so an
+     anamorphic source was stretched to square pixels.
+- **Fix:**
+  - **Distortion (the real bug):** Added `MediaInfo.SARNum`/`SARDen`
+    (parsed from ffprobe's `sample_aspect_ratio`) and
+    `upscaleTargetDimensions`, a pure function that computes an upscale
+    target from the source's *display* aspect ratio — stored width × SAR ÷
+    height — rather than its stored pixel dimensions. `getUpscaleFilter`
+    now uses it before scaling and appends `setsar=1` after: `setsar` alone
+    only re-tags the output as square-pixel, it doesn't undo a stretch that
+    already happened during scaling, which is why both pieces were needed.
+    This also fixes the same distortion for any non-16:9 square-pixel
+    source (4:3, cinemascope, …), not only anamorphic ones — the bug was
+    never really "no SAR support," it was "no aspect-ratio handling at
+    all," and SAR was just the specific case that got named. No padding:
+    a source that isn't 16:9 comes out at a smaller, correctly-proportioned
+    resolution rather than letterboxed, which keeps the fix to plain
+    `scale=W:H` on every backend (CPU, `scale_cuda`, `scale_vaapi`) instead
+    of needing a hardware-aware pad filter too.
+  - **Default:** Investigated first rather than assumed — every code path
+    that builds a `ScannerConfig` (the `LoadScannerConfig` defaults, a
+    freshly-unmarshaled `scanner_config.json`, `BodyParser` on `POST
+    /api/scanner/config`) already leaves an unset `AutoUpscale` at Go's
+    zero value, `false`; no path was found that silently turns it on. Added
+    an explicit `AutoUpscale: false` in `LoadScannerConfig`'s literal and a
+    comment in `Validate()` recording that finding, so the field reads as a
+    deliberate decision rather than an oversight — but did not invent
+    defaulting logic for a bug that isn't there.
+- **Tests:** `TestParseRatio`, `TestUpscaleTargetDimensions` (anamorphic
+  16:9 DVD → exact 1080p; anamorphic 4:3 DVD → fits within the box instead
+  of being stretched to fill it; square-pixel cinemascope → same fix
+  applies; unknown dimensions → falls back to the target box; odd
+  computed dimensions → rounded to even for 4:2:0 chroma subsampling) and
+  `TestUpscaleFilterPreservesAnamorphicAspectRatio` (end-to-end through
+  `buildFFmpegArgs` for CPU/NVIDIA/Intel-AMD, asserting the anamorphic 4:3
+  case does *not* produce `1920:1080`). Existing upscale tests
+  (`TestVAAPIUpscaleReplacesHwupload` and friends) re-run unchanged and
+  still pass. Full `-race` suite, `go vet ./...`, `go build ./...`, `gofmt
+  -l .` clean. No `ffmpeg`/`ffprobe` binary in this sandbox, so — same
+  caveat as #41 — this is verified at the argument-construction level, not
+  against a real encode.
 
 ### 41. `skipHighResolution` Does Not Apply to Manual Jobs
 
@@ -284,28 +330,6 @@ written 2026-02-27 and was not re-verified against the code before this review.
 
 ---
 
-## 🟠 High — Output Quality
-
-*All five found during production testing, 2026-09-03; #38, #39, #40, and #41
-closed 2026-09-04.*
-
-### 42. `autoUpscale` Defaults On, and Upscaling Ignores SAR
-
-- **Status:** 🟠 Open
-- **File:** `internal/scanner/scanner.go`; `internal/media/ffmpeg.go`
-- **Details:** Two separate problems behind the *Caged* 856 → 1080 result.
-  1. **Default.** `ScannerConfig.AutoUpscale` has no default in `Validate()` or
-     `LoadScannerConfig`, so an enabled value came from persisted config or the
-     UI's initial state. Upscaling should be opt-in per job.
-  2. **Distortion.** There is no SAR handling anywhere in `internal/media` —
-     `getUpscaleFilter` emits a bare `scale_vaapi=W:H` / `scale=W:H`, so an
-     anamorphic source is stretched to square pixels. Fixing the default hides
-     this; anyone who opts in still gets a distorted file.
-- **Fix:** Explicit `false` default in both places; add `setsar`/aspect
-  preservation to the upscale filter, or refuse to upscale anamorphic sources.
-
----
-
 ## 🟠 High — Concurrency
 
 ### 43. Shared Mutable State Is Unsynchronised
@@ -531,21 +555,20 @@ that gate never reached.
 | Priority | Open | Resolved |
 |----------|------|----------|
 | 🔴 Critical | 2 | 5 |
-| 🟠 High | 4 | 11 |
+| 🟠 High | 3 | 12 |
 | 🟡 Medium | 5 | 7 |
 | 🟢 Low | 3 | 17 |
-| **Total** | **14** | **40** |
+| **Total** | **13** | **41** |
 
 ---
 
 ## Suggested Order
 
-1. ~~**#35**~~, ~~**#38**~~, ~~**#39**~~, ~~**#40**~~, ~~**#41**~~ — done.
-2. **#42** — everything actively making files worse.
-3. **#36, #37** — process crash and the arbitrary-write path.
-4. **#43** (with its race test), then **#44**, **#45**.
-5. **#46, #47, #48, #49**.
-6. **#50**, then **#51** (which depends on #43), **#52**, **#53**.
+1. ~~**#35**~~, ~~**#38**~~, ~~**#39**~~, ~~**#40**~~, ~~**#41**~~, ~~**#42**~~ — done.
+2. **#36, #37** — process crash and the arbitrary-write path.
+3. **#43** (with its race test), then **#44**, **#45**.
+4. **#46, #47, #48, #49**.
+5. **#50**, then **#51** (which depends on #43), **#52**, **#53**.
 
 ---
 

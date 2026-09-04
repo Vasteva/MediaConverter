@@ -281,6 +281,93 @@ func TestShouldRefuseCRFSuggestion(t *testing.T) {
 	}
 }
 
+func TestParseRatio(t *testing.T) {
+	cases := []struct {
+		name    string
+		input   string
+		wantNum int
+		wantDen int
+	}{
+		{"anamorphic NTSC widescreen", "32:27", 32, 27},
+		{"square pixels", "1:1", 1, 1},
+		{"ffprobe's unknown", "0:1", 0, 0},
+		{"empty string", "", 0, 0},
+		{"no separator", "11", 0, 0},
+		{"negative numerator", "-1:1", 0, 0},
+		{"zero denominator", "1:0", 0, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			num, den := parseRatio(tc.input)
+			if num != tc.wantNum || den != tc.wantDen {
+				t.Errorf("parseRatio(%q) = (%d, %d), want (%d, %d)", tc.input, num, den, tc.wantNum, tc.wantDen)
+			}
+		})
+	}
+}
+
+// TestUpscaleTargetDimensions covers #42: an upscale target must preserve
+// the source's display aspect ratio (stored dimensions × SAR), not just
+// stretch stored pixels to fill a square-pixel box.
+func TestUpscaleTargetDimensions(t *testing.T) {
+	cases := []struct {
+		name                       string
+		srcW, srcH, sarNum, sarDen int
+		targetW, targetH           int
+		wantW, wantH               int
+	}{
+		{
+			name: "anamorphic 16:9 DVD maps cleanly to 1080p",
+			// 720x480 stored, 32:27 SAR — the classic NTSC anamorphic
+			// widescreen case. True DAR is exactly 16:9.
+			srcW: 720, srcH: 480, sarNum: 32, sarDen: 27,
+			targetW: 1920, targetH: 1080,
+			wantW: 1920, wantH: 1080,
+		},
+		{
+			name: "anamorphic 4:3 DVD fits within the box, not stretched to fill it",
+			// 720x480 stored, 8:9 SAR — true DAR is 4:3. The old bare
+			// scale=1920:1080 stretched this to 16:9, which is the
+			// distortion #42 is about.
+			srcW: 720, srcH: 480, sarNum: 8, sarDen: 9,
+			targetW: 1920, targetH: 1080,
+			wantW: 1440, wantH: 1080,
+		},
+		{
+			name: "square-pixel cinemascope isn't stretched to fill the height either",
+			// No SAR (square pixels) but not 16:9 — the general case the
+			// old code got wrong for any non-16:9 source, anamorphic or not.
+			srcW: 1920, srcH: 800, sarNum: 0, sarDen: 0,
+			targetW: 1920, targetH: 1080,
+			wantW: 1920, wantH: 800,
+		},
+		{
+			name: "unknown source dimensions falls back to the target box",
+			srcW: 0, srcH: 0, sarNum: 0, sarDen: 0,
+			targetW: 1920, targetH: 1080,
+			wantW: 1920, wantH: 1080,
+		},
+		{
+			name: "odd computed dimensions are rounded up to even",
+			srcW: 3, srcH: 2, sarNum: 0, sarDen: 0,
+			targetW: 101, targetH: 101,
+			wantW: 102, wantH: 68,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotW, gotH := upscaleTargetDimensions(tc.srcW, tc.srcH, tc.sarNum, tc.sarDen, tc.targetW, tc.targetH)
+			if gotW != tc.wantW || gotH != tc.wantH {
+				t.Errorf("upscaleTargetDimensions(%d, %d, %d, %d, %d, %d) = (%d, %d), want (%d, %d)",
+					tc.srcW, tc.srcH, tc.sarNum, tc.sarDen, tc.targetW, tc.targetH, gotW, gotH, tc.wantW, tc.wantH)
+			}
+			if gotW%2 != 0 || gotH%2 != 0 {
+				t.Errorf("upscaleTargetDimensions(...) = (%d, %d), want both dimensions even", gotW, gotH)
+			}
+		})
+	}
+}
+
 func TestTranscodeWithProgressCallback(t *testing.T) {
 	wrapper, err := NewFFmpegWrapper()
 	if err != nil {

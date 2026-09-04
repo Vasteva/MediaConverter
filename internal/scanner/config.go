@@ -22,6 +22,12 @@ func LoadScannerConfig(cfg *config.Config, watchDirsFile string) (*ScannerConfig
 		DefaultPriority:   5,
 		OutputDirectory:   cfg.DestDir,
 
+		// Upscaling is opt-in per job, never a silent default — explicit
+		// here even though it's also the zero value, so a defaulting bug
+		// introduced elsewhere in this literal doesn't accidentally turn it
+		// on (#42).
+		AutoUpscale: false,
+
 		// Default file extensions
 		ExtractExtensions: []string{".iso"},
 		OptimizeExtensions: []string{

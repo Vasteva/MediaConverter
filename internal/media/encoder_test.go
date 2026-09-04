@@ -74,6 +74,49 @@ func TestVAAPIUpscaleReplacesHwupload(t *testing.T) {
 	}
 }
 
+// TestUpscaleFilterPreservesAnamorphicAspectRatio pins #42: upscaling an
+// anamorphic source (non-square stored pixels — common on DVD rips) must not
+// stretch it to fill a square-pixel target box.
+func TestUpscaleFilterPreservesAnamorphicAspectRatio(t *testing.T) {
+	// 720x480 stored, 8:9 SAR — true display aspect is 4:3, not the 3:2 its
+	// stored dimensions alone would suggest.
+	opts := TranscodeOptions{
+		InputPath:    "/input/test.mkv",
+		OutputPath:   "/output/test.mkv",
+		CRF:          23,
+		Upscale:      true,
+		Resolution:   "1080p",
+		SourceWidth:  720,
+		SourceHeight: 480,
+		SARNum:       8,
+		SARDen:       9,
+	}
+
+	cases := []struct {
+		name   string
+		vendor GPUVendor
+		want   string
+	}{
+		{"CPU software scale", GPUVendorCPU, "scale=1440:1080:flags=lanczos,setsar=1"},
+		{"NVIDIA scale_cuda", GPUVendorNvidia, "scale_cuda=1440:1080,setsar=1"},
+		{"Intel/AMD scale_vaapi", GPUVendorIntel, "scale_vaapi=1440:1080,setsar=1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			opts.GPUVendor = tc.vendor
+			args := argString(newTestWrapper().buildFFmpegArgs(opts))
+			if !strings.Contains(args, tc.want) {
+				t.Errorf("expected %q\ngot: %s", tc.want, args)
+			}
+			// A bare 1920:1080 would mean the old stretch-to-fill behaviour
+			// survived — the exact distortion this fix removes.
+			if strings.Contains(args, "1920:1080") {
+				t.Errorf("anamorphic source must not be stretched to 1920:1080\ngot: %s", args)
+			}
+		})
+	}
+}
+
 // HDR sources must carry their colour signalling to the output, or the result
 // can play back washed out on an HDR display.
 func TestColorSignallingIsPreserved(t *testing.T) {

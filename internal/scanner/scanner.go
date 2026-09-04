@@ -49,7 +49,7 @@ type ScannerConfig struct {
 	ScanIntervalSec     int              `json:"scanIntervalSec"` // For periodic mode
 	AutoCreateJobs      bool             `json:"autoCreateJobs"`
 	AutoCreateSubtitles bool             `json:"autoCreateSubtitles"`
-	AutoUpscale         bool             `json:"autoUpscale"`
+	AutoUpscale         bool             `json:"autoUpscale"` // Default: false — opt-in per job, never a silent default (#42)
 	AutoResolution      string           `json:"autoResolution"`
 	ProcessedFilePath   string           `json:"processedFilePath"` // Track processed files
 
@@ -78,6 +78,13 @@ func (c *ScannerConfig) Validate() {
 	if c.Mode == "" {
 		c.Mode = ScanModeManual
 	}
+	// AutoUpscale has no non-zero default to apply here — Go's zero value
+	// for a bool already is the "off" default this field wants, and every
+	// path that builds a ScannerConfig (LoadScannerConfig's defaults, a
+	// freshly-unmarshaled scanner_config.json, BodyParser on POST
+	// /api/scanner/config) leaves an absent key at that same zero value.
+	// Recorded here so the absence of a default-setting line isn't mistaken
+	// for an oversight (#42).
 }
 
 type ScanStatus struct {
