@@ -213,7 +213,7 @@ function App() {
   }, [token, fetchStats]);
 
   // Create new job
-  const createJob = useCallback(async (jobData: Partial<Job>) => {
+  const createJob = useCallback(async (jobData: Partial<Job>): Promise<{ ok: boolean; error?: string }> => {
     try {
       const response = await authFetch('/api/jobs', {
         method: 'POST',
@@ -222,12 +222,22 @@ function App() {
       });
       if (response.ok) {
         await fetchJobs();
-        return true;
+        return { ok: true };
       }
-      return false;
+      // The backend rejects requests it understands with a JSON {error}
+      // body (e.g. #41's resolution-filter check) — surface that instead of
+      // leaving the caller to guess why nothing happened.
+      let message = `Request failed (${response.status})`;
+      try {
+        const body = await response.json();
+        if (body?.error) message = body.error;
+      } catch {
+        // Non-JSON error body — fall back to the generic status message.
+      }
+      return { ok: false, error: message };
     } catch (error) {
       console.error('Failed to create job:', error);
-      return false;
+      return { ok: false, error: 'Network error — could not reach the server' };
     }
   }, [authFetch, fetchJobs]);
 

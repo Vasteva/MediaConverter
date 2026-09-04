@@ -5,11 +5,12 @@
 ## 📋 Executive Summary
 
 Eleven open issues, from a full source review on 2026-09-04 combined with findings
-from production testing on 2026-09-03. #35 and #36–#42 closed the same day they
-were filed — every Critical item and everything found in production testing.
-#37's code-level fix is done and tested; its Docker/entrypoint half still needs a
-deploy-and-verify pass on the homelab host before it can be trusted (no Docker on
-the dev machine this was built on — see its entry above).
+from production testing on 2026-09-03. #35, #36–#42, and #54 closed the same day
+they were filed — every Critical item and everything found in production testing,
+including one (#54) found only by actually deploying and using today's fixes.
+#37's Docker/entrypoint half is now deploy-verified on the homelab host: the
+process genuinely drops to PUID/PGID, not just in theory. VAAPI itself is still
+unconfirmed — see #37's entry for where that attempt got interrupted.
 
 The media pipeline itself — `internal/media` (ffmpeg, progress, validate) and
 `internal/ai/meta` — is in good shape and holds up under review. The remaining open
@@ -26,6 +27,35 @@ written 2026-02-27 and was not re-verified against the code before this review.
 ---
 
 ## ✅ Closed Today
+
+### 54. Job Creation Failures Are Silently Swallowed by the UI
+
+- **Status:** ✅ Resolved (2026-09-04)
+- **File:** `web/src/App.tsx`; `web/src/components/JobList.tsx`
+- **Details:** Found live, not by review — deploying #37/#41 to production and
+  testing a real conversion surfaced it immediately. `createJob` in `App.tsx`
+  returned a bare `boolean`; on any non-2xx response it returned `false` with
+  no message, and `JobList.tsx`'s create-job modal did nothing with a `false`
+  beyond re-enabling the submit button — the modal just sat there. This made
+  every rejection the backend already explains clearly (#41's resolution
+  filter, #37's path validation, a bad CRF, license checks, ...) look
+  identical to the UI being broken. The specific trigger: a `POST /api/jobs`
+  for a 2160p source correctly rejected by `skipHighResolution`, which
+  produced a clear 400 with a `{error}` body that the UI threw away.
+- **Fix:** `createJob` now returns `{ ok, error? }`, reading the backend's
+  JSON `{error}` body on a non-2xx response (falling back to a generic
+  `Request failed (status)` message if the body isn't JSON, and a distinct
+  network-error message if the fetch itself throws). `JobList.tsx` renders
+  that message in the create-job modal (existing `alert alert-error` style,
+  matching Settings' own save-error display) and keeps the modal open
+  instead of doing nothing; the modal now also clears any stale error when
+  opened or closed, via `openCreateModal`/`closeCreateModal` helpers
+  replacing the scattered direct `setShowCreateModal` calls.
+- **Verified:** manually, against a local server — a source path outside
+  `SourceDir` (`/etc/passwd`) now shows "access denied: path /etc/passwd is
+  outside allowed directories" inline and leaves the modal open; a valid
+  path still creates the job and closes the modal normally. `npm run
+  build`/`lint` clean.
 
 ### 37. Arbitrary File Write via Unvalidated Paths
 
@@ -77,18 +107,21 @@ written 2026-02-27 and was not re-verified against the code before this review.
     point is not being root); `docker-compose.yml`'s external `8091` and
     the Traefik label are updated to match internally, so this is invisible
     from outside the container.
-- **Not done:** couldn't be verified by actually building or running either
-  Dockerfile — no Docker on this dev machine (see
-  `vastiva-homelab-deployment` project memory). Verified everything short
-  of that: `sh -n`/`dash -n` on the entrypoint script, and the exact
-  `setpriv` invocation run locally (fails on `setgroups: Operation not
-  permitted` when unprivileged, which is the *expected* failure mode for
-  flags that parsed correctly and are attempting the real privileged
-  syscall — a syntax error would have failed differently, at option
-  parsing). **This needs a real deploy-and-verify pass on the homelab host**
-  before being trusted: confirm the container starts, `/data` and newly
-  written output land owned by the configured PUID/PGID, VAAPI still works
-  for the Arc A310, and the health check passes on the new port.
+- **Deploy-verified on the homelab host (2026-09-04, post-merge):** the
+  container builds, starts, and stays healthy on the new port; the actual
+  `vastiva` process (PID 51, child of `docker-init`/tini — `init: true`
+  makes tini PID 1, which is root by design and not what to check) runs as
+  `ubuntu`/uid 1000, matching `PUID`/`PGID`, not root. Getting here surfaced
+  two operational gotchas worth remembering, neither a code defect: the
+  deploy workflow only builds and pushes a new image on push to `main`, it
+  does **not** auto-deploy it (`docker compose pull && up -d` on the host is
+  a separate, manual step — see the `deploy` job's own comment on why); and
+  `:latest` resolved to a stale digest even after an explicit pull, cause
+  still unconfirmed, worked around by pinning the compose file to the exact
+  digest CI produced. VAAPI itself is still unconfirmed — the first real
+  conversion attempt hit #54 (a 2160p source correctly rejected by
+  `skipHighResolution`, but the UI gave no indication why) before actually
+  reaching the encode step.
 - **Tests:** `TestValidatePathResolvesSymlinks` (an existing symlink
   escaping the sandbox is rejected; one pointing back inside is accepted;
   a not-yet-existing path behind an escaping symlink is still rejected; the
@@ -662,17 +695,17 @@ that gate never reached.
 |----------|------|----------|
 | 🔴 Critical | 0 | 7 |
 | 🟠 High | 3 | 12 |
-| 🟡 Medium | 5 | 7 |
+| 🟡 Medium | 5 | 8 |
 | 🟢 Low | 3 | 17 |
-| **Total** | **11** | **43** |
+| **Total** | **11** | **44** |
 
 ---
 
 ## Suggested Order
 
 1. ~~**#35**~~, ~~**#36**~~, ~~**#37**~~, ~~**#38**~~, ~~**#39**~~, ~~**#40**~~,
-   ~~**#41**~~, ~~**#42**~~ — done. **#37 still needs a deploy-and-verify pass
-   on the homelab host** — see its entry above.
+   ~~**#41**~~, ~~**#42**~~, ~~**#54**~~ — done. #37's entrypoint is now
+   deploy-verified; VAAPI itself still isn't confirmed — see its entry above.
 2. **#43** (with its race test — now with a confirmed reproduction, see #43), then **#44**, **#45**.
 3. **#46, #47, #48, #49**.
 4. **#50**, then **#51** (which depends on #43), **#52**, **#53**.

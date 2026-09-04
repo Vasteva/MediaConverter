@@ -4,7 +4,7 @@ import type { Job } from '../types';
 
 interface JobListProps {
     jobs: Job[];
-    onCreateJob: (job: Partial<Job>) => Promise<boolean>;
+    onCreateJob: (job: Partial<Job>) => Promise<{ ok: boolean; error?: string }>;
     onCancelJob: (jobId: string) => Promise<boolean>;
     onRetryJob: (jobId: string) => Promise<boolean>;
     onClearFailed?: () => Promise<boolean>;
@@ -44,6 +44,7 @@ export default function JobList({ jobs, onCreateJob, onCancelJob, onRetryJob, on
     const [upscale, setUpscale] = useState(false);
     const [resolution, setResolution] = useState('1080p');
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [createError, setCreateError] = useState<string | null>(null);
     const [maxRetries, setMaxRetries] = useState(0);
     const [showFileBrowser, setShowFileBrowser] = useState(false);
     const [activeBrowserField, setActiveBrowserField] = useState<'source' | 'dest' | null>(null);
@@ -51,6 +52,16 @@ export default function JobList({ jobs, onCreateJob, onCancelJob, onRetryJob, on
     const openBrowser = (field: 'source' | 'dest') => {
         setActiveBrowserField(field);
         setShowFileBrowser(true);
+    };
+
+    const openCreateModal = () => {
+        setCreateError(null);
+        setShowCreateModal(true);
+    };
+
+    const closeCreateModal = () => {
+        setCreateError(null);
+        setShowCreateModal(false);
     };
 
     const failedCount = useMemo(() => jobs.filter(j => ['failed', 'cancelled'].includes(j.status)).length, [jobs]);
@@ -118,8 +129,9 @@ export default function JobList({ jobs, onCreateJob, onCancelJob, onRetryJob, on
     const handleCreateJob = async (e: React.FormEvent) => {
         e.preventDefault();
         setIsSubmitting(true);
+        setCreateError(null);
 
-        const success = await onCreateJob({
+        const result = await onCreateJob({
             type: newJobType,
             sourcePath,
             destinationPath: destPath || undefined,
@@ -131,10 +143,16 @@ export default function JobList({ jobs, onCreateJob, onCancelJob, onRetryJob, on
         });
 
         setIsSubmitting(false);
-        if (success) {
+        if (result.ok) {
             setShowCreateModal(false);
             setSourcePath('');
             setDestPath('');
+        } else {
+            // The backend rejects requests it understands with a specific
+            // reason (e.g. a resolution-filter or sandbox-path violation) —
+            // show it rather than leaving the modal looking like it did
+            // nothing, which is how this went unnoticed for a while.
+            setCreateError(result.error ?? 'Failed to create job');
         }
     };
 
@@ -148,7 +166,7 @@ export default function JobList({ jobs, onCreateJob, onCancelJob, onRetryJob, on
                     </div>
                     <button
                         className="btn btn-primary"
-                        onClick={() => setShowCreateModal(true)}
+                        onClick={openCreateModal}
                     >
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ width: '20px', height: '20px' }}>
                             <path d="M12 4v16m8-8H4" strokeWidth="2" strokeLinecap="round" />
@@ -477,11 +495,11 @@ export default function JobList({ jobs, onCreateJob, onCancelJob, onRetryJob, on
 
             {/* Create Job Modal */}
             {showCreateModal && (
-                <div className="modal-backdrop" onClick={() => setShowCreateModal(false)}>
+                <div className="modal-backdrop" onClick={closeCreateModal}>
                     <div className="modal-content" onClick={e => e.stopPropagation()}>
                         <div className="modal-header">
                             <h3>Create New Job</h3>
-                            <button className="btn-icon" onClick={() => setShowCreateModal(false)}>
+                            <button className="btn-icon" onClick={closeCreateModal}>
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" style={{ width: '20px', height: '20px' }}>
                                     <path d="M6 18L18 6M6 6l12 12" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                                 </svg>
@@ -623,12 +641,18 @@ export default function JobList({ jobs, onCreateJob, onCancelJob, onRetryJob, on
                                         Automatically retry the job with exponential backoff if it fails.
                                     </p>
                                 </div>
+
+                                {createError && (
+                                    <div className="alert alert-error">
+                                        <p>{createError}</p>
+                                    </div>
+                                )}
                             </div>
                             <div className="modal-footer flexjustify-end gap-2">
                                 <button
                                     type="button"
                                     className="btn btn-secondary"
-                                    onClick={() => setShowCreateModal(false)}
+                                    onClick={closeCreateModal}
                                     disabled={isSubmitting}
                                 >
                                     Cancel
