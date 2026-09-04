@@ -174,6 +174,85 @@ func TestDiscInfoTitleDurationSeconds(t *testing.T) {
 	}
 }
 
+func TestParseFrameRate(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  float64
+	}{
+		{"NTSC film rate", "24000/1001", 23.976023976023978},
+		{"whole number rate", "25/1", 25},
+		{"unknown, ffprobe's 0/0", "0/0", 0},
+		{"empty string", "", 0},
+		{"plain decimal, no slash", "29.97", 29.97},
+		{"garbage denominator", "30/abc", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseFrameRate(tc.input); got != tc.want {
+				t.Errorf("parseFrameRate(%q) = %v, want %v", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBitsPerPixel exercises the density calculation #39's skip-if-efficient
+// filter is built on.
+func TestBitsPerPixel(t *testing.T) {
+	cases := []struct {
+		name string
+		info *MediaInfo
+		want float64
+	}{
+		{
+			name: "well-formed 1080p24 source",
+			// 100 MB over 60s at 1920x1080/24fps.
+			info: &MediaInfo{Size: 100 << 20, Duration: 60, VideoWidth: 1920, VideoHeight: 1080, FrameRate: 24},
+			want: (float64(100<<20) * 8 / 60) / (1920 * 1080 * 24),
+		},
+		{"missing size", &MediaInfo{Duration: 60, VideoWidth: 1920, VideoHeight: 1080, FrameRate: 24}, 0},
+		{"missing duration", &MediaInfo{Size: 100 << 20, VideoWidth: 1920, VideoHeight: 1080, FrameRate: 24}, 0},
+		{"missing dimensions", &MediaInfo{Size: 100 << 20, Duration: 60, FrameRate: 24}, 0},
+		{"missing frame rate", &MediaInfo{Size: 100 << 20, Duration: 60, VideoWidth: 1920, VideoHeight: 1080}, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.info.BitsPerPixel(); got != tc.want {
+				t.Errorf("BitsPerPixel() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestIsAlreadyEfficient covers #39: only HEVC/AV1 sources at or below the
+// density floor should be treated as not worth re-encoding.
+func TestIsAlreadyEfficient(t *testing.T) {
+	cases := []struct {
+		name         string
+		codec        string
+		bitsPerPixel float64
+		floor        float64
+		want         bool
+	}{
+		{"HEVC below the floor", "hevc", 0.04, 0.06, true},
+		{"HEVC exactly at the floor", "hevc", 0.06, 0.06, true},
+		{"HEVC above the floor", "hevc", 0.07, 0.06, false},
+		{"AV1 below the floor", "av1", 0.04, 0.06, true},
+		{"H.264 below the floor still re-encodes", "h264", 0.04, 0.06, false},
+		{"unknown codec", "", 0.04, 0.06, false},
+		{"zero density never skips", "hevc", 0, 0.06, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := IsAlreadyEfficient(tc.codec, tc.bitsPerPixel, tc.floor)
+			if got != tc.want {
+				t.Errorf("IsAlreadyEfficient(%q, %v, %v) = %v, want %v",
+					tc.codec, tc.bitsPerPixel, tc.floor, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestTranscodeWithProgressCallback(t *testing.T) {
 	wrapper, err := NewFFmpegWrapper()
 	if err != nil {

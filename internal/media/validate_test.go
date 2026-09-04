@@ -23,7 +23,7 @@ func TestCheckSourceSupported(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := CheckSourceSupported(tc.info)
+			err := CheckSourceSupported(tc.info, DefaultDensityFloor)
 			if tc.wantError && err == nil {
 				t.Error("expected an error, got nil")
 			}
@@ -32,6 +32,59 @@ func TestCheckSourceSupported(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCheckSourceSupportedSkipsEfficientSources covers #39: an HEVC/AV1
+// source already at or below the density floor should be skipped, not
+// re-encoded — and reported as a *SkipEncodeError, distinct from a plain
+// error, so the caller can complete the job rather than fail it.
+func TestCheckSourceSupportedSkipsEfficientSources(t *testing.T) {
+	// A source dense enough to trip the floor: 90 minutes, 1920x1080, 24fps,
+	// sized to land at roughly 0.04 bits/pixel — comfortably under the 0.06
+	// default floor.
+	efficient := &MediaInfo{
+		Filename:    "efficient.mkv",
+		CodecName:   "hevc",
+		Duration:    5400,
+		VideoWidth:  1920,
+		VideoHeight: 1080,
+		FrameRate:   24,
+	}
+	efficient.Size = int64(0.04 * float64(efficient.VideoWidth*efficient.VideoHeight) *
+		efficient.FrameRate * efficient.Duration / 8)
+
+	err := CheckSourceSupported(efficient, DefaultDensityFloor)
+	if err == nil {
+		t.Fatal("expected an efficient HEVC source to be skipped")
+	}
+	var skipErr *SkipEncodeError
+	if !errorsAs(err, &skipErr) {
+		t.Fatalf("expected *SkipEncodeError, got %T: %v", err, err)
+	}
+
+	// The same density on an H.264 source still benefits from moving to
+	// HEVC, so it must not be skipped.
+	h264 := *efficient
+	h264.CodecName = "h264"
+	if err := CheckSourceSupported(&h264, DefaultDensityFloor); err != nil {
+		t.Errorf("expected an H.264 source not to be skipped on codec grounds alone, got: %v", err)
+	}
+
+	// A bloated HEVC REMUX — well above the floor — must go through the
+	// encoder rather than being skipped.
+	bloated := *efficient
+	bloated.Size = efficient.Size * 5
+	if err := CheckSourceSupported(&bloated, DefaultDensityFloor); err != nil {
+		t.Errorf("expected a bloated HEVC source not to be skipped, got: %v", err)
+	}
+}
+
+func errorsAs(err error, target **SkipEncodeError) bool {
+	v, ok := err.(*SkipEncodeError)
+	if ok {
+		*target = v
+	}
+	return ok
 }
 
 // The size checks in ValidateOutput run before any ffprobe call, so they are

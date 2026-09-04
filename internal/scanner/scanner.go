@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Vasteva/MediaConverter/internal/jobs"
+	"github.com/Vasteva/MediaConverter/internal/media"
 	"github.com/Vasteva/MediaConverter/internal/util"
 	"github.com/fsnotify/fsnotify"
 )
@@ -619,6 +620,16 @@ func (s *Scanner) createJobForFile(path string) error {
 		}
 	}
 
+	// Skip sources that are already an efficient HEVC/AV1 encode — re-encoding
+	// them again is generational loss for no size benefit. The job path
+	// re-checks this too (media.CheckSourceSupported), but catching it here
+	// means it never occupies a queue slot in the first place.
+	if jobType == jobs.JobTypeOptimize && s.isAlreadyEfficientEncode(path) {
+		log.Printf("[Scanner] Skipping %s: already an efficient encode", path)
+		s.processedDB.MarkProcessed(ProcessedFile{Path: path, JobType: string(jobType)})
+		return nil
+	}
+
 	// Generate output path
 	outputPath := s.generateOutputPath(path, jobType)
 
@@ -873,11 +884,25 @@ type DiscoveredFile struct {
 func (s *Scanner) isHighResolution(path string, threshold int) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	_, height, err := s.jobManager.GetVideoResolution(ctx, path)
+	_, height, _, _, err := s.jobManager.GetVideoResolution(ctx, path)
 	if err != nil {
 		return false
 	}
 	return height >= threshold
+}
+
+// isAlreadyEfficientEncode returns true if the video at path is already an
+// HEVC/AV1 encode dense enough that re-encoding it again would be
+// generational loss for no size benefit (#39). On any error it returns false
+// so the file is included rather than silently dropped.
+func (s *Scanner) isAlreadyEfficientEncode(path string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, _, codec, bitsPerPixel, err := s.jobManager.GetVideoResolution(ctx, path)
+	if err != nil {
+		return false
+	}
+	return media.IsAlreadyEfficient(codec, bitsPerPixel, s.jobManager.GetConfig().DensityFloor)
 }
 
 // Discover scans all watch directories and returns files that would be processed,
@@ -924,14 +949,18 @@ func (s *Scanner) Discover() ([]DiscoveredFile, error) {
 				continue
 			}
 
-			// Probe video resolution for optimize jobs and apply high-res filter
+			// Probe video resolution for optimize jobs and apply the high-res and
+			// already-efficient filters — one probe covers both (#41, #39).
 			var videoWidth, videoHeight int
 			if jobType == "optimize" {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				w, h, _ := s.jobManager.GetVideoResolution(ctx, path)
+				w, h, codec, bpp, _ := s.jobManager.GetVideoResolution(ctx, path)
 				cancel()
 				videoWidth, videoHeight = w, h
 				if s.config.SkipHighResolution && h >= s.config.ResolutionHeightThreshold {
+					continue
+				}
+				if media.IsAlreadyEfficient(codec, bpp, s.jobManager.GetConfig().DensityFloor) {
 					continue
 				}
 			}

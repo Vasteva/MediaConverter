@@ -357,6 +357,8 @@ func (f *FFmpegWrapper) GetMediaInfo(ctx context.Context, path string) (*MediaIn
 			Height           int    `json:"height"`
 			PixFmt           string `json:"pix_fmt"`
 			BitsPerRawSample string `json:"bits_per_raw_sample"`
+			RFrameRate       string `json:"r_frame_rate"`
+			AvgFrameRate     string `json:"avg_frame_rate"`
 			ColorPrimaries   string `json:"color_primaries"`
 			ColorTransfer    string `json:"color_transfer"`
 			ColorSpace       string `json:"color_space"`
@@ -411,6 +413,14 @@ func (f *FFmpegWrapper) GetMediaInfo(ctx context.Context, path string) (*MediaIn
 					}
 				}
 
+				// avg_frame_rate is the true mean over the stream; r_frame_rate is
+				// the container's nominal rate and is used as a fallback for the
+				// (uncommon) case where avg_frame_rate comes back "0/0".
+				info.FrameRate = parseFrameRate(s.AvgFrameRate)
+				if info.FrameRate <= 0 {
+					info.FrameRate = parseFrameRate(s.RFrameRate)
+				}
+
 				for _, sd := range s.SideDataList {
 					if sd.DVProfile > 0 {
 						info.DVProfile = sd.DVProfile
@@ -446,9 +456,10 @@ type MediaInfo struct {
 	// 10-bit source with an 8-bit encoder profile fails at encoder init, after
 	// the output file has already been created — which is how a 0-byte output
 	// gets left behind.
-	CodecName string // e.g. "hevc", "h264"
-	PixFmt    string // e.g. "yuv420p", "yuv420p10le"
-	BitDepth  int    // 8, 10 or 12; 0 when unknown
+	CodecName string  // e.g. "hevc", "h264"
+	PixFmt    string  // e.g. "yuv420p", "yuv420p10le"
+	BitDepth  int     // 8, 10 or 12; 0 when unknown
+	FrameRate float64 // frames per second; 0 when unknown
 
 	// Colour signalling, copied to the output so HDR content doesn't lose its
 	// metadata and render washed out.
@@ -512,6 +523,41 @@ func (m *MediaInfo) EncodingSummary() string {
 		m.VideoStreams, m.AudioStreams, m.SubtitleStreams)
 
 	return b.String()
+}
+
+// BitsPerPixel returns the source's average bits per pixel per frame — total
+// bitrate divided by pixel count and frame rate. This is the standard density
+// measure for how much information an encode carries per picture, independent
+// of resolution and duration, and is what IsAlreadyEfficient compares against
+// to decide whether a source is already an efficient encode.
+//
+// Returns 0 when size, duration, dimensions, or frame rate aren't known — the
+// zero value never satisfies IsAlreadyEfficient's "at or below the floor"
+// check, so an unprobeable source is never mistakenly skipped.
+func (m *MediaInfo) BitsPerPixel() float64 {
+	if m.Size <= 0 || m.Duration <= 0 || m.VideoWidth <= 0 || m.VideoHeight <= 0 || m.FrameRate <= 0 {
+		return 0
+	}
+	bitsPerSecond := float64(m.Size) * 8 / m.Duration
+	pixelsPerSecond := float64(m.VideoWidth) * float64(m.VideoHeight) * m.FrameRate
+	return bitsPerSecond / pixelsPerSecond
+}
+
+// parseFrameRate parses an ffprobe rational frame rate string ("24000/1001",
+// "25/1") into frames per second. Returns 0 for "0/0" (ffprobe's way of
+// saying unknown) or anything else unparseable.
+func parseFrameRate(s string) float64 {
+	num, den, ok := strings.Cut(s, "/")
+	if !ok {
+		v, _ := strconv.ParseFloat(s, 64)
+		return v
+	}
+	n, err1 := strconv.ParseFloat(num, 64)
+	d, err2 := strconv.ParseFloat(den, 64)
+	if err1 != nil || err2 != nil || d == 0 {
+		return 0
+	}
+	return n / d
 }
 
 // IsHDR reports whether the source uses a HDR transfer function.

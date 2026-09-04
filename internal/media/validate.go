@@ -221,15 +221,60 @@ func MeetsSavingsFloor(srcSize, outSize int64, floor float64) bool {
 	return savings >= floor
 }
 
+// DefaultDensityFloor is the bits-per-pixel-per-frame density at or below
+// which an HEVC or AV1 source is treated as already an efficient encode.
+//
+// This is a rough heuristic, not a quality measurement — bpp varies with
+// content complexity and resolution, and the same value doesn't mean the same
+// thing for a 1080p WEB-DL and a 2160p REMUX. It is deliberately set low
+// enough that only sources clearly at or below what this pipeline's own HEVC
+// output would land at get skipped; anything borderline is left to go through
+// the encoder rather than risk skipping a source that would actually benefit.
+// A sample-encode-and-measure-VMAF approach would be more accurate but costs
+// a partial encode per candidate; this is the zero-latency first tier.
+const DefaultDensityFloor = 0.06
+
+// SkipEncodeError signals that a source should not be re-encoded — not
+// because the pipeline cannot handle it (CheckSourceSupported's plain errors
+// are for that), but because doing so would not improve it. Callers should
+// complete the job as a successful no-op rather than treating this as a
+// failure.
+type SkipEncodeError struct {
+	Reason string
+}
+
+func (e *SkipEncodeError) Error() string { return e.Reason }
+
+// IsAlreadyEfficient reports whether a source encoded in codec, with the
+// given bits-per-pixel-per-frame density, is efficient enough that
+// re-encoding it again is not worth the generational quality loss.
+//
+// Keyed on codec identity as well as density: an H.264 source at the same
+// density as a good HEVC encode still benefits from moving to a more
+// efficient codec, so this only ever applies to sources already in HEVC or
+// AV1 — the codecs this pipeline itself would produce.
+func IsAlreadyEfficient(codec string, bitsPerPixel, floor float64) bool {
+	switch strings.ToLower(codec) {
+	case "hevc", "h265", "av1":
+		return bitsPerPixel > 0 && bitsPerPixel <= floor
+	default:
+		return false
+	}
+}
+
 // CheckSourceSupported reports whether a source can be transcoded correctly
-// with the current pipeline, returning a descriptive error when it cannot.
+// with the current pipeline, returning a descriptive error when it cannot —
+// or a *SkipEncodeError when it can, but re-encoding it would not help.
 //
 // Dolby Vision profile 5 has no HDR10 base layer. Re-encoding it discards the
 // RPU metadata that carries the colour transform, so the result plays back with
 // badly shifted colour — green casts and crushed highlights. Profiles 7 and 8
 // carry a conventional HDR10 base layer that survives the re-encode; the Dolby
 // Vision layer is lost, but the output is correct HDR10.
-func CheckSourceSupported(src *MediaInfo) error {
+//
+// densityFloor is compared against the source's BitsPerPixel() — see
+// IsAlreadyEfficient and DefaultDensityFloor.
+func CheckSourceSupported(src *MediaInfo, densityFloor float64) error {
 	if src == nil {
 		return nil
 	}
@@ -237,6 +282,12 @@ func CheckSourceSupported(src *MediaInfo) error {
 		return fmt.Errorf(
 			"unsupported input: Dolby Vision profile 5 has no HDR10 base layer and "+
 				"cannot be re-encoded without tonemapping (%s)", src.Filename)
+	}
+	if bpp := src.BitsPerPixel(); IsAlreadyEfficient(src.CodecName, bpp, densityFloor) {
+		return &SkipEncodeError{Reason: fmt.Sprintf(
+			"source is already %s at %.3f bits/pixel (floor %.3f) — re-encoding would be "+
+				"generational loss for no size benefit (%s)",
+			strings.ToUpper(src.CodecName), bpp, densityFloor, src.Filename)}
 	}
 	return nil
 }

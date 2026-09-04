@@ -4,17 +4,19 @@
 
 ## 📋 Executive Summary
 
-Seventeen open issues, from a full source review on 2026-09-04 combined with findings
-from production testing on 2026-09-03. #35 and #38 closed the same day they were filed.
+Sixteen open issues, from a full source review on 2026-09-04 combined with findings
+from production testing on 2026-09-03. #35, #38, and #39 closed the same day they
+were filed.
 
 The media pipeline itself — `internal/media` (ffmpeg, progress, validate) and
 `internal/ai/meta` — is in good shape and holds up under review. The open work is
 concentrated in two places:
 
-- **Nothing else stops a job from making a file worse.** No codec/bitrate
-  filter, an AI CRF suggestion that cannot be switched off, and a resolution
-  filter that only applies to scanner jobs (#39–#42). Production testing found
-  real files inflated by re-encoding already-efficient HEVC.
+- **Nothing else stops a job from making a file worse.** An AI CRF suggestion
+  that cannot be switched off, and a resolution filter that only applies to
+  scanner jobs (#40–#42). Production testing found real files inflated by
+  re-encoding already-efficient HEVC — the codec/bitrate filter that would
+  have caught it (#39) is now closed.
 - **Shared mutable state is unsynchronised.** `config.Config` has no mutex at all
   while the API mutates it under running workers (#43).
 
@@ -24,6 +26,58 @@ written 2026-02-27 and was not re-verified against the code before this review.
 ---
 
 ## ✅ Closed Today
+
+### 39. Already-Efficient Sources Are Re-Encoded
+
+- **Status:** ✅ Resolved (2026-09-04)
+- **File:** `internal/media/ffmpeg.go`; `internal/media/validate.go`;
+  `internal/config/config.go`; `internal/config/precedence.go`;
+  `internal/jobs/manager.go`; `internal/scanner/scanner.go`
+- **Details:** Nothing checked the source codec before queueing or
+  processing. HEVC → HEVC is generational loss with no size benefit. This is
+  what inflated the *28 Days / Weeks / Years Later* files, which were already
+  HEVC.
+- **Fix:** Bitrate-density filter, as proposed — codec identity alone wasn't
+  enough since a hard codec skip would permanently block re-encoding a
+  bloated HEVC at a higher CRF.
+  - Added `MediaInfo.FrameRate` (parsed from ffprobe's `avg_frame_rate`,
+    falling back to `r_frame_rate`) and `MediaInfo.BitsPerPixel()` — average
+    bitrate divided by pixel count and frame rate, the standard density
+    measure. Zero on any missing input, which never satisfies the "at or
+    below the floor" check, so an unprobeable source is never skipped by
+    mistake.
+  - Added `media.IsAlreadyEfficient(codec, bitsPerPixel, floor)` — true only
+    for HEVC/AV1 sources at or below the floor. An H.264 source at the same
+    density still benefits from moving to HEVC, so codec identity gates it
+    as well as density.
+  - Added `Config.DensityFloor` (default `0.06`, env `DENSITY_FLOOR`),
+    default sourced from the new `media.DefaultDensityFloor` constant so the
+    number lives in one place. Same settings-page/API exposure deferral as
+    `SavingsFloor` (#38) — see #51 and #43.
+  - `media.CheckSourceSupported` now also runs this check and, gated on
+    codec/density, returns a new `*media.SkipEncodeError` — distinct from
+    its existing plain-error case (DV profile 5) so the caller can tell "this
+    pipeline can't handle it" (real failure) apart from "handling it
+    wouldn't help" (skip). `runOptimizationFromPath` in `manager.go` type-
+    switches on it: a skip sets `StatusDetail` and completes the job
+    successfully, before any transcode work starts — zero added latency for
+    the common case, matching the proposal.
+  - Scanner side: `Manager.GetVideoResolution` now also returns codec and
+    density from the same probe it already ran — no second ffprobe per file.
+    `createJobForFile` and `Discover` both apply the filter alongside the
+    existing high-resolution one, so these never occupy a queue slot in the
+    first place; the job-path check above is what actually protects manually
+    queued and `QueueFile`-created jobs.
+- **Not done:** the optional sample-encode/VMAF tier from the proposal —
+  correctly scoped out as a later, costlier accuracy improvement, not part
+  of this fix.
+- **Tests:** `TestParseFrameRate`, `TestBitsPerPixel`, `TestIsAlreadyEfficient`
+  (media package, pure functions), `TestCheckSourceSupportedSkipsEfficientSources`
+  (confirms an efficient HEVC source is skipped via `*SkipEncodeError`, the
+  same density on H.264 is not, and a bloated HEVC source is not). Full
+  `internal/media`, `internal/config`, `internal/jobs`, `internal/scanner`
+  suites re-run with `-race -count=1`: all pass. `go vet ./...` and `go
+  build ./...` clean across the whole module.
 
 ### 38. No Skip-If-Not-Smaller Guard
 
@@ -144,31 +198,7 @@ written 2026-02-27 and was not re-verified against the code before this review.
 
 ## 🟠 High — Output Quality
 
-*All five found during production testing, 2026-09-03.*
-
-### 39. Already-Efficient Sources Are Re-Encoded
-
-- **Status:** 🟠 Open — approach needs sign-off
-- **File:** `internal/media/ffmpeg.go`; `internal/scanner/scanner.go`
-- **Details:** Nothing checks the source codec before queueing or processing.
-  HEVC → HEVC is generational loss with no size benefit. This is what inflated
-  the *28 Days / Weeks / Years Later* files, which were already HEVC.
-  `MediaInfo.CodecName` is populated at `ffmpeg.go:401` and never consumed for a
-  skip decision.
-- **Proposal:** Filter on **bitrate density, not codec identity**. Compute
-  bits per pixel per frame from the probe (`MediaInfo` already carries `Size`,
-  `Duration`, `VideoWidth/Height`; `EncodingSummary` already derives average
-  bitrate). Skip HEVC/AV1 sources at or below the density a good HEVC encode
-  would produce; let genuinely bloated ones through. Deterministic, testable,
-  no model call, no added latency — a hard codec skip would permanently block
-  re-encoding a bloated HEVC at a higher CRF.
-- **Optional later tier:** sample-encode 60 s and measure VMAF against the source
-  to decide. Accurate, but costs a partial encode per candidate.
-- **Fix:** Add the gate to `media.CheckSourceSupported`, which already exists for
-  exactly this purpose and runs immediately after the probe in
-  `runOptimizationFromPath`. Scanner side needs it too so these never queue:
-  extend `GetVideoResolution` to return codec and bitrate, then check in
-  `createJobForFile` and `Discover` alongside the resolution filter.
+*All five found during production testing, 2026-09-03; #38 and #39 closed 2026-09-04.*
 
 ### 40. AI CRF Suggestion Cannot Be Switched Off
 
@@ -437,17 +467,17 @@ that gate never reached.
 | Priority | Open | Resolved |
 |----------|------|----------|
 | 🔴 Critical | 2 | 5 |
-| 🟠 High | 7 | 8 |
+| 🟠 High | 6 | 9 |
 | 🟡 Medium | 5 | 7 |
 | 🟢 Low | 3 | 17 |
-| **Total** | **17** | **37** |
+| **Total** | **16** | **38** |
 
 ---
 
 ## Suggested Order
 
-1. ~~**#35**~~, ~~**#38**~~ — done.
-2. **#39, #40, #41, #42** — everything actively making files worse.
+1. ~~**#35**~~, ~~**#38**~~, ~~**#39**~~ — done.
+2. **#40, #41, #42** — everything actively making files worse.
 3. **#36, #37** — process crash and the arbitrary-write path.
 4. **#43** (with its race test), then **#44**, **#45**.
 5. **#46, #47, #48, #49**.

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Vasteva/MediaConverter/internal/license"
+	"github.com/Vasteva/MediaConverter/internal/media"
 	"github.com/Vasteva/MediaConverter/internal/system"
 )
 
@@ -95,6 +96,11 @@ type Config struct {
 	// this doesn't become one more field mutated without synchronisation.
 	SavingsFloor float64 `json:"savingsFloor"` // Default: 0.15
 
+	// DensityFloor is the bits-per-pixel-per-frame density at or below which
+	// an HEVC/AV1 source is skipped rather than re-encoded — see
+	// media.IsAlreadyEfficient. Same exposure caveat as SavingsFloor above.
+	DensityFloor float64 `json:"densityFloor"` // Default: 0.06
+
 	// Reintegration. With ReplaceInPlace the transcode is written beside its
 	// source and, once validated, takes the source's place in the library —
 	// so Jellyfin sees the optimised file without anything being moved by
@@ -158,6 +164,7 @@ func Load() *Config {
 		DeleteSource:         getEnvBool("DELETE_SOURCE", false),
 		AutoConvertISO:       getEnvBool("AUTO_CONVERT_ISO", false),
 		SavingsFloor:         getEnvFloat("SAVINGS_FLOOR", 0.15),
+		DensityFloor:         getEnvFloat("DENSITY_FLOOR", media.DefaultDensityFloor),
 		ReplaceInPlace:       getEnvBool("REPLACE_IN_PLACE", false),
 		HoldingDir:           getEnv("HOLDING_DIR", ""),
 		PUID:                 getEnvInt("PUID", -1),
@@ -242,6 +249,7 @@ func (c *Config) loadFromDisk() error {
 	m.boolean(&c.DeleteSource, importJSON.DeleteSource, present("deleteSource"), "DELETE_SOURCE", "deleteSource")
 	m.boolean(&c.AutoConvertISO, importJSON.AutoConvertISO, present("autoConvertISO"), "AUTO_CONVERT_ISO", "autoConvertISO")
 	m.float(&c.SavingsFloor, importJSON.SavingsFloor, present("savingsFloor"), "SAVINGS_FLOOR", "savingsFloor")
+	m.float(&c.DensityFloor, importJSON.DensityFloor, present("densityFloor"), "DENSITY_FLOOR", "densityFloor")
 
 	m.boolean(&c.ReplaceInPlace, importJSON.ReplaceInPlace, present("replaceInPlace"), "REPLACE_IN_PLACE", "replaceInPlace")
 	m.str(&c.HoldingDir, importJSON.HoldingDir, "HOLDING_DIR", "holdingDir")

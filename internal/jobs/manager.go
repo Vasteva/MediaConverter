@@ -290,16 +290,19 @@ func (m *Manager) GetAllJobs() []*Job {
 	return result
 }
 
-// GetVideoResolution returns the video width and height for a media file using ffprobe.
-func (m *Manager) GetVideoResolution(ctx context.Context, path string) (width, height int, err error) {
+// GetVideoResolution returns the video width, height, codec, and
+// bits-per-pixel density for a media file using ffprobe, for the scanner's
+// resolution (#41) and already-efficient (#39) pre-queue filters. One probe
+// serves both so scanning a directory doesn't cost a second ffprobe per file.
+func (m *Manager) GetVideoResolution(ctx context.Context, path string) (width, height int, codec string, bitsPerPixel float64, err error) {
 	if m.ffmpeg == nil {
-		return 0, 0, fmt.Errorf("ffmpeg not available")
+		return 0, 0, "", 0, fmt.Errorf("ffmpeg not available")
 	}
 	info, err := m.ffmpeg.GetMediaInfo(ctx, path)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, "", 0, err
 	}
-	return info.VideoWidth, info.VideoHeight, nil
+	return info.VideoWidth, info.VideoHeight, info.CodecName, info.BitsPerPixel(), nil
 }
 
 func (m *Manager) CancelJob(id string) bool {
@@ -998,9 +1001,26 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 		job.ID, info.Duration, info.VideoWidth, info.VideoHeight,
 		info.PixFmt, info.BitDepth, info.ColorTransfer, info.DVProfile)
 
-	// Reject inputs this pipeline cannot encode correctly, rather than emitting
-	// a broken file that looks like a success.
-	if err := media.CheckSourceSupported(info); err != nil {
+	// Reject inputs this pipeline cannot encode correctly, and skip sources
+	// that are already an efficient HEVC/AV1 encode — re-encoding either
+	// produces a colour-shifted Dolby Vision profile 5 output, or is
+	// generational loss for no size benefit. The two are distinguished by
+	// error type: a skip is not a failure, and completes the job rather than
+	// retrying or failing it.
+	if err := media.CheckSourceSupported(info, m.config.DensityFloor); err != nil {
+		var skipErr *media.SkipEncodeError
+		if errors.As(err, &skipErr) {
+			log.Printf("[Job %s] %s", job.ID, skipErr.Reason)
+			m.appendAILog(job, AILog{
+				Timestamp: time.Now(),
+				Operation: "source_skipped",
+				Provider:  "System",
+				Detail:    skipErr.Reason,
+				Success:   true,
+			})
+			m.updateJob(job, func(j *Job) { j.StatusDetail = skipErr.Reason })
+			return false, nil
+		}
 		log.Printf("[Job %s] %v", job.ID, err)
 		m.appendAILog(job, AILog{
 			Timestamp: time.Now(),
