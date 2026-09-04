@@ -149,6 +149,31 @@ func TestMakeMKVSanitizeFilename(t *testing.T) {
 	}
 }
 
+func TestDiscInfoTitleDurationSeconds(t *testing.T) {
+	info := &DiscInfo{Titles: []TitleInfo{
+		{Index: 0, Duration: "00:05:00"},
+		{Index: 1, Duration: "01:32:14"},
+		{Index: 2, Duration: "bogus"},
+	}}
+
+	cases := []struct {
+		name string
+		idx  int
+		want float64
+	}{
+		{"found, parses cleanly", 1, 5534},
+		{"found, unparsable duration string", 2, 0},
+		{"index not present on disc", 7, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := info.TitleDurationSeconds(tc.idx); got != tc.want {
+				t.Errorf("TitleDurationSeconds(%d) = %v, want %v", tc.idx, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestTranscodeWithProgressCallback(t *testing.T) {
 	wrapper, err := NewFFmpegWrapper()
 	if err != nil {

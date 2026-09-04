@@ -130,6 +130,78 @@ func (f *FFmpegWrapper) ValidateOutput(ctx context.Context, src *MediaInfo, outp
 	return nil
 }
 
+// ValidateExtractedOutput checks that a freshly extracted MKV is a complete,
+// probeable copy of the disc title it came from.
+//
+// Disc extraction has no encode step to fail mid-stream the way a transcode
+// does, but MakeMKV can still be interrupted — a scratched disc, a drive that
+// drops mid-read — and leave a truncated file behind while exiting 0. A bare
+// existence-and-nonzero-size check accepts that as a complete extraction,
+// which is how a source disc image has been deleted while the only remaining
+// copy was a stub.
+//
+// expectedDurationSec is the duration MakeMKV itself reported for the title
+// during the scan (DiscInfo.TitleDurationSeconds) — ffprobe cannot read the
+// disc directly, so this is the only source duration available. Pass 0 to
+// skip the duration check when it isn't known.
+func (f *FFmpegWrapper) ValidateExtractedOutput(ctx context.Context, expectedDurationSec float64, outputPath string) error {
+	var reasons []string
+
+	info, err := os.Stat(outputPath)
+	if err != nil {
+		return &OutputValidationError{
+			Path:    outputPath,
+			Reasons: []string{fmt.Sprintf("output file is missing (%v)", err)},
+		}
+	}
+	if info.IsDir() {
+		return &OutputValidationError{
+			Path:    outputPath,
+			Reasons: []string{"output path is a directory, not a file"},
+		}
+	}
+	if outSize := info.Size(); outSize < minAbsoluteSizeBytes {
+		return &OutputValidationError{
+			Path: outputPath,
+			Reasons: []string{fmt.Sprintf("output is %d bytes, below the %d byte floor",
+				outSize, minAbsoluteSizeBytes)},
+		}
+	}
+
+	out, err := f.GetMediaInfo(ctx, outputPath)
+	if err != nil {
+		return &OutputValidationError{
+			Path:    outputPath,
+			Reasons: []string{fmt.Sprintf("output is not probeable, likely corrupt (%v)", err)},
+		}
+	}
+
+	if out.VideoStreams == 0 {
+		reasons = append(reasons, "output contains no video stream")
+	}
+
+	if expectedDurationSec > 0 {
+		if out.Duration <= 0 {
+			reasons = append(reasons, "output has no readable duration")
+		} else {
+			tolerance := expectedDurationSec * durationTolerancePct
+			if tolerance < durationToleranceFloorSec {
+				tolerance = durationToleranceFloorSec
+			}
+			if drift := expectedDurationSec - out.Duration; drift > tolerance {
+				reasons = append(reasons, fmt.Sprintf(
+					"output is %.1fs shorter than the disc title reported (%.1fs vs %.1fs, tolerance %.1fs) — truncated",
+					drift, out.Duration, expectedDurationSec, tolerance))
+			}
+		}
+	}
+
+	if len(reasons) > 0 {
+		return &OutputValidationError{Path: outputPath, Reasons: reasons}
+	}
+	return nil
+}
+
 // CheckSourceSupported reports whether a source can be transcoded correctly
 // with the current pipeline, returning a descriptive error when it cannot.
 //

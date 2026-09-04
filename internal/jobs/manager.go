@@ -592,27 +592,27 @@ func (m *Manager) processJob(job *Job) {
 			})
 
 			// Pass the extracted source explicitly
-			err = m.runOptimizationFromPath(job, extractedSource)
+			var optimizeVerified bool
+			optimizeVerified, err = m.runOptimizationFromPath(job, extractedSource)
 
 			// Cleanup
 			if err == nil {
 				os.RemoveAll(extractDir)
-				// If the job manager is configured to delete source, and we just converted an ISO,
-				// runOptimizationFromPath won't delete the ISO because its 'sourcePath' (extractedSource)
-				// is the intermediate MKV. We need to handle the original source deletion here.
-				if m.config.DeleteSource {
-					// We only delete if it was verified or if verifyOutput is false
-					verified := false
-					if !m.config.VerifyOutput {
-						verified = true // assume verified if check is disabled
-					} else {
-						// Re-check if verified bit was set during runOptimizationFromPath (it writes to job.Verified)
-						job.mu.RLock()
-						verified = job.Verified
-						job.mu.RUnlock()
-					}
-
-					if verified {
+				// runOptimizationFromPath already used optimizeVerified to decide
+				// whether to delete its own sourcePath argument — the intermediate
+				// MKV (extractedSource), not the original disc image. The disc
+				// image is this job's actual DeleteSource target, handled here,
+				// gated on the SAME verification result runOptimizationFromPath
+				// already computed rather than a second, independently-derived
+				// copy of it (the previous version of this code re-checked
+				// job.Verified, which is only ever set when AI verification
+				// actually ran and passed — so with verifyOutput on but AI
+				// verification inconclusive, that re-check silently read false
+				// too, but for the wrong reason, and a future edit to either path
+				// could easily let the two diverge and delete on a result that
+				// was never actually verified).
+				if job.DeleteSource {
+					if optimizeVerified {
 						log.Printf("[Job %s] Deleting original disc image source: %s", job.ID, cleanPath)
 						if dErr := os.Remove(cleanPath); dErr != nil {
 							log.Printf("Warning: Failed to delete disc image source: %v", dErr)
@@ -626,6 +626,8 @@ func (m *Manager) processJob(job *Job) {
 								Success:    true,
 							})
 						}
+					} else {
+						log.Printf("[Job %s] SKIPPING disc image deletion — optimization output not verified", job.ID)
 					}
 				}
 			}
@@ -634,7 +636,7 @@ func (m *Manager) processJob(job *Job) {
 			m.updateJob(job, func(j *Job) {
 				j.StatusDetail = "Optimizing"
 			})
-			err = m.runOptimization(job)
+			_, err = m.runOptimization(job)
 		}
 	case JobTypeTest:
 		err = m.runTest(job)
@@ -904,9 +906,50 @@ func (m *Manager) runExtraction(job *Job) error {
 	})
 	log.Printf("[Job %s] Extraction complete: %s", job.ID, finalPath)
 
-	// 7. Delete the source ISO if configured and the output is verified non-empty
+	// 7. Validate before trusting the extraction or deleting anything. MakeMKV
+	// exits 0 even when a scratched disc or a drive read error truncates the
+	// title partway through, and the bare size>0 check this replaces accepted
+	// that as a complete extraction — which is how a source disc image has
+	// been deleted while the only remaining copy was a truncated stub.
+	verified := false
+	m.updateJob(job, func(j *Job) { j.StatusDetail = "Validating" })
+	if m.ffmpeg == nil {
+		log.Printf("[Job %s] Warning: ffmpeg not available — cannot validate the extraction, source will be retained", job.ID)
+		m.appendAILog(job, AILog{
+			Timestamp: time.Now(),
+			Operation: "output_validation",
+			Provider:  "System",
+			Detail:    "Validation could not run (ffmpeg unavailable) — output kept, source retained",
+			Success:   false,
+		})
+	} else {
+		expectedDuration := info.TitleDurationSeconds(mainTitleIdx)
+		if valErr := m.ffmpeg.ValidateExtractedOutput(job.ctx, expectedDuration, finalPath); valErr != nil {
+			log.Printf("[Job %s] Extraction output rejected: %v", job.ID, valErr)
+			m.appendAILog(job, AILog{
+				Timestamp: time.Now(),
+				Operation: "output_validation",
+				Provider:  "System",
+				Detail:    "Extraction output rejected — see error",
+				Success:   false,
+				Error:     valErr.Error(),
+			})
+			m.discardOutput(job, finalPath, "failed extraction validation")
+			return valErr
+		}
+		verified = true
+		m.appendAILog(job, AILog{
+			Timestamp: time.Now(),
+			Operation: "output_validation",
+			Provider:  "System",
+			Detail:    "Extraction validated: duration and video stream within tolerance",
+			Success:   true,
+		})
+	}
+
+	// 8. Delete the source disc image only once the extraction is verified.
 	if deleteSource {
-		if fi, statErr := os.Stat(finalPath); statErr == nil && fi.Size() > 0 {
+		if verified {
 			log.Printf("[Job %s] Deleting source disc image: %s", job.ID, sourcePath)
 			if delErr := os.Remove(sourcePath); delErr != nil {
 				log.Printf("Warning: Failed to delete source disc image: %v", delErr)
@@ -921,16 +964,24 @@ func (m *Manager) runExtraction(job *Job) error {
 				})
 			}
 		} else {
-			log.Printf("[Job %s] SKIPPING source deletion — output file missing or empty", job.ID)
+			log.Printf("[Job %s] SKIPPING source deletion — extraction not verified", job.ID)
 		}
 	}
 
 	return nil
 }
 
-func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
+// runOptimizationFromPath transcodes sourcePath and returns whether the
+// output was verified — either by AI verification when it ran, or, when that
+// is unavailable, by the deterministic ValidateOutput gate alone — plus any
+// error. Callers that need to gate a second deletion of their own (the ISO
+// auto-extract path deleting the original disc image, once the optimize step
+// on the extracted MKV has run) use this returned value rather than
+// re-deriving it, which is what previously let that second deletion run on
+// its own, looser copy of the verification logic.
+func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, error) {
 	if m.ffmpeg == nil {
-		return fmt.Errorf("ffmpeg wrapper not initialized")
+		return false, fmt.Errorf("ffmpeg wrapper not initialized")
 	}
 
 	log.Printf("[Job %s] Starting optimization: %s", job.ID, sourcePath)
@@ -940,7 +991,7 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 	info, err := m.ffmpeg.GetMediaInfo(job.ctx, sourcePath)
 	if err != nil {
 		log.Printf("[Job %s] Error getting media info: %v", job.ID, err)
-		return fmt.Errorf("failed to get media info: %w", err)
+		return false, fmt.Errorf("failed to get media info: %w", err)
 	}
 
 	log.Printf("[Job %s] Source: %.2fs, %dx%d, %s (%d-bit), transfer=%q, DV profile=%d",
@@ -959,7 +1010,7 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 			Success:   false,
 			Error:     err.Error(),
 		})
-		return err
+		return false, err
 	}
 	if info.IsDolbyVision() {
 		log.Printf("[Job %s] Note: Dolby Vision profile %d — encoding the HDR10 base layer; "+
@@ -1033,7 +1084,7 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 	}
 
 	if sourcePath == destPath {
-		return fmt.Errorf("source and destination paths are identical (%s): FFmpeg cannot encode a file in-place", sourcePath)
+		return false, fmt.Errorf("source and destination paths are identical (%s): FFmpeg cannot encode a file in-place", sourcePath)
 	}
 
 	opts := media.TranscodeOptions{
@@ -1086,7 +1137,7 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 			log.Printf("[Job %s] FFmpeg failed: %v", job.ID, err)
 		}
 		m.discardOutput(job, destPath, "transcode failed")
-		return err
+		return false, err
 	}
 
 	// Validate before believing the exit code. A transcode can stop early and
@@ -1107,7 +1158,7 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 			Error:      valErr.Error(),
 		})
 		m.discardOutput(job, destPath, "failed validation")
-		return valErr
+		return false, valErr
 	}
 	m.appendAILog(job, AILog{
 		Timestamp:  t0Val,
@@ -1218,7 +1269,7 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 				Success:    false,
 			})
 			m.discardOutput(job, destPath, "failed AI verification")
-			return fmt.Errorf("AI verification failed: corruption detected in output")
+			return false, fmt.Errorf("AI verification failed: corruption detected in output")
 		} else {
 			log.Printf("[Premium] SUCCESS: Video integrity verified by AI.")
 			verified = true
@@ -1258,7 +1309,7 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 				Detail:    "Output was not verified; library left unchanged",
 				Success:   false,
 			})
-			return fmt.Errorf("replacement skipped: output could not be verified")
+			return false, fmt.Errorf("replacement skipped: output could not be verified")
 		}
 
 		if err := m.reintegrate(job, replacement); err != nil {
@@ -1271,7 +1322,7 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 				Success:   false,
 				Error:     err.Error(),
 			})
-			return err
+			return false, err
 		}
 
 		// The job's real output is the promoted file, not the temp path.
@@ -1279,7 +1330,7 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 
 		// The original has been moved to holding, not deleted — deleteSource is
 		// not the mechanism here and must not also run.
-		return nil
+		return true, nil
 	}
 
 	// Ownership for the non-replacing path, so outputs are still usable from
@@ -1309,10 +1360,10 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) error {
 		}
 	}
 
-	return nil
+	return verified, nil
 }
 
-func (m *Manager) runOptimization(job *Job) error {
+func (m *Manager) runOptimization(job *Job) (bool, error) {
 	return m.runOptimizationFromPath(job, job.SourcePath)
 }
 

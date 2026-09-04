@@ -289,6 +289,18 @@ func (d *DiscInfo) FindLargestTitle() int {
 	return largestIdx
 }
 
+// TitleDurationSeconds returns the duration MakeMKV reported for the given
+// title index during the scan, in seconds, or 0 if the title is not present
+// or its duration could not be parsed.
+func (d *DiscInfo) TitleDurationSeconds(idx int) float64 {
+	for _, t := range d.Titles {
+		if t.Index == idx {
+			return float64(parseDurationToSeconds(t.Duration))
+		}
+	}
+	return 0
+}
+
 // parseDurationToSeconds converts duration string (HH:MM:SS) to seconds
 func parseDurationToSeconds(duration string) int {
 	parts := strings.Split(duration, ":")
