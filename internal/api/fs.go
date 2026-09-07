@@ -50,12 +50,17 @@ func handleListFiles(c *fiber.Ctx, cfg *config.Config) error {
 
 	log.Printf("[FS] Listing path: %s", absPath)
 
+	// One snapshot for the whole request: cfg is shared, unsynchronized,
+	// with every HTTP handler that writes it and every job-worker goroutine
+	// that reads it (#43).
+	snap := cfg.Snapshot()
+
 	// Security: Restrict to SourceDir or DestDir
-	if _, err := security.ValidatePath(absPath, cfg.SourceDir, cfg.DestDir); err != nil {
+	if _, err := security.ValidatePath(absPath, snap.SourceDir, snap.DestDir); err != nil {
 		// Check if the requested path is a parent of an allowed directory.
 		// If so, return a virtual listing showing only the accessible subdirs.
 		var virtualEntries []FileEntry
-		for _, allowedDir := range []string{cfg.SourceDir, cfg.DestDir} {
+		for _, allowedDir := range []string{snap.SourceDir, snap.DestDir} {
 			if allowedDir == "" {
 				continue
 			}

@@ -4,22 +4,25 @@
 
 ## 📋 Executive Summary
 
-Eleven open issues, from a full source review on 2026-09-04 combined with findings
-from production testing on 2026-09-03. #35, #36–#42, and #54 closed the same day
-they were filed — every Critical item and everything found in production testing,
-including one (#54) found only by actually deploying and using today's fixes.
+Ten open issues, from a full source review on 2026-09-04 combined with findings
+from production testing on 2026-09-03. #35, #36–#43, and #54 closed the same day
+they were filed — every Critical item, the concurrency issue found by review, and
+everything found in production testing, including one (#54) found only by
+actually deploying and using today's fixes.
 #37's Docker/entrypoint half is now deploy-verified on the homelab host: the
 process genuinely drops to PUID/PGID, not just in theory. VAAPI itself is still
 unconfirmed — see #37's entry for where that attempt got interrupted.
 
 The media pipeline itself — `internal/media` (ffmpeg, progress, validate) and
-`internal/ai/meta` — is in good shape and holds up under review. The remaining open
-work is concentrated in one place:
+`internal/ai/meta` — is in good shape and holds up under review. #43's shared
+mutable state (`config.Config`, `Manager.ai`, `Scanner.config`/`stopCh`) is now
+synchronized and covered by a race test that reproduces the original bug — this
+was no longer theoretical by the time it was fixed: a #36 regression test had
+already tripped `s.config`'s race under `-race` on the first try. The remaining
+open work is concentrated in the job queue itself:
 
-- **Shared mutable state is unsynchronised.** `config.Config` has no mutex at all
-  while the API mutates it under running workers (#43) — and this is no longer
-  theoretical: a #36 regression test tripped `s.config`'s race under `-race` on
-  the first try.
+- **Jobs can run twice.** `PurgeJobs` and `RetryJob` both push onto the queue
+  without checking whether the job is already there (#44).
 
 The previous revision of this file claimed all known bugs were resolved. That was
 written 2026-02-27 and was not re-verified against the code before this review.
@@ -27,6 +30,68 @@ written 2026-02-27 and was not re-verified against the code before this review.
 ---
 
 ## ✅ Closed Today
+
+### 43. Shared Mutable State Is Unsynchronised
+
+- **Status:** ✅ Resolved (2026-09-04)
+- **File:** `internal/config/config.go`; `internal/config/config_test.go`;
+  `internal/jobs/manager.go`; `internal/jobs/reintegrate.go`;
+  `internal/api/auth.go`; `internal/api/fs.go`; `internal/api/sse.go`;
+  `internal/api/routes.go`; `internal/scanner/scanner.go`;
+  `internal/scanner/scanner_test.go`
+- **Details:** Four distinct races, all now fixed.
+  - **`config.Config` had no mutex at all.** `POST /api/config` mutated
+    `CRF`, `IsPremium`, `Schedule`, `DeleteSource` and more from the HTTP
+    goroutine while workers read them with no synchronization.
+  - **`m.ai`** — `UpdateAIProvider` wrote under `m.mu`; 14 reads did not,
+    including `GetAI()` itself.
+  - **`s.config`** — `UpdateConfig` wrote under `s.mu`; roughly 28 reads in
+    `Start`, `ScanAll`, `scanDirectory`, `createJobForFile`,
+    `generateOutputPath`, `setupWatchers`, `handleNewFile`, `periodicScan`,
+    and `Discover` did not. `GetConfig()` returned the live pointer straight
+    to the JSON encoder.
+  - **`Scanner.Stop()` set `s.stopCh = nil`** while `watchFiles`,
+    `periodicScan`, and `delayedProcess` were selecting on that field — a
+    goroutine that read the nil after the close but before (or in place of)
+    seeing it fire blocked on that case forever, and for `periodicScan`
+    specifically that meant `Stop()`'s own `wg.Wait()` could hang
+    indefinitely. Separately, `delayedProcess` was spawned without
+    `wg.Add`, so it outlived `Stop` entirely.
+- **Fix:**
+  - Added a nil-tolerant `*sync.RWMutex` to `config.Config` with a
+    `WithLock(fn func())` write helper (deliberately not named
+    `Lock`/`Unlock` — that shape satisfies `sync.Locker` and makes `go vet`'s
+    copylocks check flag every copy of `Config`, including `Snapshot`'s own
+    return) and a `Snapshot() Config` method returning a point-in-time copy.
+    Every HTTP handler and worker-side read now goes through `Snapshot()`;
+    every write goes through `WithLock`. CRF validation in `POST /api/config`
+    was deliberately moved before the `WithLock` call — returning from
+    inside that closure would only exit the closure, not the HTTP handler.
+  - `m.ai` reads now go through `GetAI()` (which takes `m.mu.RLock()`);
+    `processJob`/`runOptimizationFromPath` take one `aiProvider` snapshot per
+    job run rather than re-reading the field at each of the ~15 use sites.
+  - `s.config` reads in every listed function now capture `cfg :=
+    s.GetConfig()` once under `s.mu.RLock()` at the top of the function,
+    mirroring the pattern `QueueFile` already used. No deep copy is needed —
+    `UpdateConfig` always swaps the whole pointer rather than mutating
+    fields in place.
+  - `watchFiles`, `periodicScan`, and `delayedProcess` now capture `stopCh
+    := s.stopCh` once (under `s.mu.RLock()`) before entering their `select`
+    loop, instead of re-reading the field each iteration — closing a channel
+    is visible on an already-captured reference regardless of what the
+    field is later set to. `delayedProcess`'s spawn site in `handleNewFile`
+    now calls `s.wg.Add(1)` to match every other long-lived scanner
+    goroutine.
+- **Tests:** `TestSnapshotIsRaceFreeUnderConcurrentWrites`
+  (`internal/config/config_test.go`) hammers `Config.WithLock`/`Snapshot`
+  from 4 writer and 8 reader goroutines. `TestConcurrentJobRunWithConfigAndScannerConfigChurn`
+  (`internal/scanner/scanner_test.go`) runs a real `JobTypeTest` job through
+  the worker pool while one goroutine hammers system config the way `POST
+  /api/config` does and another repeatedly calls `Scanner.UpdateConfig` —
+  which itself calls `Stop()` then `Start()`, exactly where the `stopCh`
+  race lived — the way `POST /api/scanner/config` does. `gofmt -l .`, `go
+  vet ./...`, `go build ./...`, and `go test -race -count=1 ./...` are all
+  clean across every package.
 
 ### 54. Job Creation Failures Are Silently Swallowed by the UI
 
@@ -461,38 +526,6 @@ written 2026-02-27 and was not re-verified against the code before this review.
 
 ## 🟠 High — Concurrency
 
-### 43. Shared Mutable State Is Unsynchronised
-
-- **Status:** 🟠 Open
-- **File:** `internal/config/config.go`; `internal/jobs/manager.go`; `internal/scanner/scanner.go`
-- **Details:** Four distinct races.
-  - **`config.Config` has no mutex at all.** `POST /api/config` mutates `CRF`,
-    `IsPremium`, `Schedule`, `DeleteSource` and more from the HTTP goroutine
-    while workers read them — 18 read sites in `manager.go`, plus
-    `isInScheduleWindow` from `scheduleWatcher`.
-  - **`m.ai`** — `UpdateAIProvider` writes under `m.mu`; 14 reads do not take it,
-    including `GetAI()` itself.
-  - **`s.config`** — `UpdateConfig` writes under `s.mu`; roughly 28 reads in
-    `ScanAll`, `scanDirectory`, `createJobForFile`, `handleNewFile` and
-    `periodicScan` do not. `GetConfig()` returns the live pointer to the JSON
-    encoder.
-    **Confirmed, not just theorized:** a #36 regression test that started
-    and stopped a live scanner across repeated `POST /api/scanner/config`
-    calls tripped this under `-race` immediately — `periodicScan` at
-    `scanner.go:886` racing a concurrent `UpdateConfig` write. Removed from
-    that test rather than fixed there, since it's this ticket's bug, not
-    #36's — see #36's own entry above for the reproduction shape.
-  - **`Scanner.Stop()` sets `s.stopCh = nil`** while `watchFiles` and
-    `periodicScan` are selecting on that field. A goroutine that reads the nil
-    blocks forever, deadlocking `Stop`'s own `wg.Wait()`. Reachable from the
-    settings UI via `UpdateConfig`. Separately, `delayedProcess` is spawned
-    without `wg.Add`, so it outlives `Stop`.
-- **Fix:** Snapshotting config per job at dequeue is probably cleaner than a
-  mutex. Lock `m.ai` and `s.config`; have `GetConfig` return a copy.
-- **Test:** CI already runs `go test -race`, but nothing drives both sides, which
-  is why these survived. Add a test that runs a `JobTypeTest` job while hammering
-  the config and scanner-config update paths.
-
 ### 44. Purged and Retried Jobs Can Run Twice
 
 - **Status:** 🟠 Open
@@ -602,7 +635,9 @@ written 2026-02-27 and was not re-verified against the code before this review.
 - **Fix:** For each field decide runtime-settable, restart-required, or
   deliberately env-only, and show that state in the UI rather than silently
   ignoring input.
-- **Sequencing:** Land #43 first — every new mutable field widens that race.
+- **Sequencing:** #43 (the config mutex) is now landed — any new field this
+  ticket exposes just needs to be read/written through `Snapshot()`/`WithLock`
+  like every other field, rather than widening an unguarded race.
 
 ### 52. Documentation Contradicts the Code
 
@@ -694,21 +729,21 @@ that gate never reached.
 | Priority | Open | Resolved |
 |----------|------|----------|
 | 🔴 Critical | 0 | 7 |
-| 🟠 High | 3 | 12 |
+| 🟠 High | 2 | 13 |
 | 🟡 Medium | 5 | 8 |
 | 🟢 Low | 3 | 17 |
-| **Total** | **11** | **44** |
+| **Total** | **10** | **45** |
 
 ---
 
 ## Suggested Order
 
 1. ~~**#35**~~, ~~**#36**~~, ~~**#37**~~, ~~**#38**~~, ~~**#39**~~, ~~**#40**~~,
-   ~~**#41**~~, ~~**#42**~~, ~~**#54**~~ — done. #37's entrypoint is now
-   deploy-verified; VAAPI itself still isn't confirmed — see its entry above.
-2. **#43** (with its race test — now with a confirmed reproduction, see #43), then **#44**, **#45**.
+   ~~**#41**~~, ~~**#42**~~, ~~**#43**~~, ~~**#54**~~ — done. #37's entrypoint is
+   now deploy-verified; VAAPI itself still isn't confirmed — see its entry above.
+2. **#44**, **#45**.
 3. **#46, #47, #48, #49**.
-4. **#50**, then **#51** (which depends on #43), **#52**, **#53**.
+4. **#50**, then **#51** (which can now build on #43's `Snapshot()`), **#52**, **#53**.
 
 ---
 

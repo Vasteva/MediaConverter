@@ -6,7 +6,9 @@ import (
 	"github.com/Vasteva/MediaConverter/internal/jobs"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestIsInDirectory(t *testing.T) {
@@ -176,6 +178,126 @@ func TestCalculateHash(t *testing.T) {
 	if hash != hash2 {
 		t.Error("expected consistent hash")
 	}
+}
+
+// TestConcurrentJobRunWithConfigAndScannerConfigChurn covers #43: config.Config
+// was mutated in place with no synchronisation at all, Manager.ai was written
+// under a mutex but read without one, ScannerConfig was read from scan
+// goroutines without the lock UpdateConfig used to swap it, and Stop() could
+// deadlock via a stopCh field read after another goroutine had already set it
+// to nil. This runs a real JobTypeTest job through the worker pool while one
+// goroutine hammers system config the way POST /api/config does and another
+// repeatedly calls Scanner.UpdateConfig — which itself calls Stop() then
+// Start() — the way POST /api/scanner/config does. None of it asserts much
+// beyond "this doesn't crash, deadlock, or trip -race", which is the point:
+// the four bugs this guards were only ever visible under -race or a hang.
+func TestConcurrentJobRunWithConfigAndScannerConfigChurn(t *testing.T) {
+	dir := t.TempDir()
+	sourceDir := filepath.Join(dir, "source")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatalf("mkdir source: %v", err)
+	}
+
+	// config.Load(), not a bare &config.Config{}: Config.mu is nil-tolerant
+	// specifically so single-threaded tests can skip Load() and construct a
+	// literal directly (see config.go), but that tolerance means a bare
+	// literal used under real concurrency — as this test needs — silently
+	// gets NO locking at all. Load() is the only path that sets mu.
+	cfg := config.Load()
+	cfg.SourceDir = sourceDir
+	cfg.DestDir = filepath.Join(dir, "dest")
+	cfg.MaxConcurrentJobs = 2
+	jm, err := jobs.NewManager(cfg, nil, filepath.Join(dir, "jobs.json"))
+	if err != nil {
+		t.Fatalf("jobs.NewManager: %v", err)
+	}
+	jm.Start()
+	defer jm.Stop()
+
+	scannerCfg := &ScannerConfig{
+		Mode:               ScanModeManual,
+		OptimizeExtensions: []string{".mkv"},
+		ProcessedFilePath:  filepath.Join(dir, "processed.json"),
+	}
+	scannerCfg.Validate()
+	s, err := NewScanner(scannerCfg, jm, filepath.Join(dir, "scanner_config.json"))
+	if err != nil {
+		t.Fatalf("NewScanner: %v", err)
+	}
+	defer s.Stop()
+
+	job := &jobs.Job{ID: "race-job", Type: jobs.JobTypeTest, Status: jobs.StatusPending}
+	jm.AddJob(job)
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	// Hammer system config the same way POST /api/config does.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for n := 0; ; n++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			cfg.WithLock(func() {
+				cfg.CRF = n % 51
+				cfg.DeleteSource = n%2 == 0
+			})
+			_ = jm.GetConfig()
+		}
+	}()
+
+	// Hammer scanner config the same way POST /api/scanner/config does.
+	// UpdateConfig itself calls Stop() then Start() — exactly where the
+	// stopCh-nil-after-close race lived.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for n := 0; ; n++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			newCfg := &ScannerConfig{
+				Mode:               ScanModeManual,
+				OptimizeExtensions: []string{".mkv"},
+				ProcessedFilePath:  filepath.Join(dir, "processed.json"),
+				DefaultPriority:    n,
+			}
+			if err := s.UpdateConfig(newCfg); err != nil {
+				t.Errorf("UpdateConfig: %v", err)
+				return
+			}
+		}
+	}()
+
+	// Read scanner state concurrently, as the HTTP handlers do.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_ = s.GetConfig()
+			_, _ = s.Discover()
+		}
+	}()
+
+	time.Sleep(300 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+
+	if status := job.GetStatus(); status == jobs.StatusPending {
+		t.Errorf("expected job to be picked up by the worker, still Pending")
+	}
+	jm.CancelJob(job.ID)
 }
 
 // TestScanSkipsHiddenDirectories covers the holding directory used by

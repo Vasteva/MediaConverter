@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestLoad(t *testing.T) {
@@ -140,4 +142,65 @@ func TestScheduleRoundTripFromNull(t *testing.T) {
 	if !strings.Contains(string(data), `"allowedDays":[]`) {
 		t.Errorf("a stale null config must still serialise as an array, got: %s", data)
 	}
+}
+
+// TestSnapshotIsRaceFreeUnderConcurrentWrites covers #43: Config is shared,
+// unsynchronized, between HTTP handlers that write it and every job-worker
+// goroutine that reads it. This hammers Snapshot() and WithLock() from many
+// goroutines at once for a short, fixed window — the point is for
+// `go test -race` to catch a regression here, not the assertions themselves,
+// though a torn Schedule.AllowedDays read would indicate one too.
+func TestSnapshotIsRaceFreeUnderConcurrentWrites(t *testing.T) {
+	cfg := Load()
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	// Writers: repeatedly change several fields together, the same shape as
+	// POST /api/config.
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				cfg.WithLock(func() {
+					cfg.CRF = n
+					cfg.DeleteSource = n%2 == 0
+					cfg.Schedule.AllowedDays = []int{n}
+				})
+			}
+		}(i)
+	}
+
+	// Readers: take a snapshot and use its fields, the same shape as a job
+	// reading config mid-run.
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				snap := cfg.Snapshot()
+				_ = snap.CRF
+				_ = snap.DeleteSource
+				if len(snap.Schedule.AllowedDays) != 1 {
+					t.Errorf("Snapshot() returned a torn Schedule.AllowedDays: %v", snap.Schedule.AllowedDays)
+					return
+				}
+			}
+		}()
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	close(stop)
+	wg.Wait()
 }

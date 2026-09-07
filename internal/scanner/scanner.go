@@ -222,14 +222,20 @@ func NewScanner(config *ScannerConfig, jobManager *jobs.Manager, configFilePath 
 
 // Start begins the scanner based on configured mode
 func (s *Scanner) Start() error {
-	if !s.config.Enabled {
+	// One read of the config pointer for this call: s.config is swapped
+	// wholesale (never mutated in place) by UpdateConfig under s.mu, so a
+	// single locked read is enough to make every reference below consistent
+	// with itself, rather than each racing UpdateConfig independently (#43).
+	cfg := s.GetConfig()
+
+	if !cfg.Enabled {
 		log.Println("[Scanner] Disabled, not starting")
 		return nil
 	}
 
-	log.Printf("[Scanner] Starting in %s mode", s.config.Mode)
+	log.Printf("[Scanner] Starting in %s mode", cfg.Mode)
 
-	switch s.config.Mode {
+	switch cfg.Mode {
 	case ScanModeManual:
 		// Do nothing, manual scans only
 		return nil
@@ -267,7 +273,7 @@ func (s *Scanner) Start() error {
 		return nil
 
 	default:
-		return fmt.Errorf("unknown scan mode: %s", s.config.Mode)
+		return fmt.Errorf("unknown scan mode: %s", cfg.Mode)
 	}
 }
 
@@ -418,7 +424,9 @@ func (s *Scanner) ScanAll() error {
 		s.isScanning.Store(false)
 	}()
 
-	if len(s.config.WatchDirectories) == 0 {
+	cfg := s.GetConfig()
+
+	if len(cfg.WatchDirectories) == 0 {
 		log.Println("[Scanner] WARNING: ScanAll() called but no watch directories are configured — nothing to scan")
 		return nil
 	}
@@ -429,7 +437,7 @@ func (s *Scanner) ScanAll() error {
 	filesFound := 0
 	jobsCreated := 0
 
-	for _, watchDir := range s.config.WatchDirectories {
+	for _, watchDir := range cfg.WatchDirectories {
 		files, err := s.scanDirectory(watchDir)
 		if err != nil {
 			// If the scanner was stopped mid-walk, exit cleanly without an error.
@@ -476,13 +484,14 @@ func (s *Scanner) ScanAll() error {
 // scanDirectory scans a single directory
 func (s *Scanner) scanDirectory(watchDir WatchDirectory) ([]string, error) {
 	var files []string
+	cfg := s.GetConfig()
 
 	// Build combined set of known extensions for fast pre-filtering
-	knownExts := make(map[string]bool, len(s.config.ExtractExtensions)+len(s.config.OptimizeExtensions))
-	for _, e := range s.config.ExtractExtensions {
+	knownExts := make(map[string]bool, len(cfg.ExtractExtensions)+len(cfg.OptimizeExtensions))
+	for _, e := range cfg.ExtractExtensions {
 		knownExts[strings.ToLower(e)] = true
 	}
-	for _, e := range s.config.OptimizeExtensions {
+	for _, e := range cfg.OptimizeExtensions {
 		knownExts[strings.ToLower(e)] = true
 	}
 
@@ -615,7 +624,9 @@ func (s *Scanner) shouldProcessFile(path string, watchDir WatchDirectory) bool {
 
 // createJobForFile creates an appropriate job for a file
 func (s *Scanner) createJobForFile(path string) error {
-	if !s.config.AutoCreateJobs {
+	cfg := s.GetConfig()
+
+	if !cfg.AutoCreateJobs {
 		log.Printf("[Scanner] Found file %s (auto-create disabled)", path)
 		return nil
 	}
@@ -624,13 +635,13 @@ func (s *Scanner) createJobForFile(path string) error {
 	var jobType jobs.JobType
 
 	// Determine job type based on extension
-	if s.containsExtension(s.config.ExtractExtensions, ext) {
+	if s.containsExtension(cfg.ExtractExtensions, ext) {
 		if s.jobManager.GetConfig().AutoConvertISO {
 			jobType = jobs.JobTypeOptimize
 		} else {
 			jobType = jobs.JobTypeExtract
 		}
-	} else if s.containsExtension(s.config.OptimizeExtensions, ext) {
+	} else if s.containsExtension(cfg.OptimizeExtensions, ext) {
 		jobType = jobs.JobTypeOptimize
 	} else {
 		log.Printf("[Scanner] Skipping %s: unknown extension %s", path, ext)
@@ -681,10 +692,10 @@ func (s *Scanner) createJobForFile(path string) error {
 		SourcePath:      path,
 		DestinationPath: outputPath,
 		Status:          jobs.StatusPending,
-		Priority:        s.config.DefaultPriority,
-		CreateSubtitles: s.config.AutoCreateSubtitles,
-		Upscale:         s.config.AutoUpscale,
-		Resolution:      s.config.AutoResolution,
+		Priority:        cfg.DefaultPriority,
+		CreateSubtitles: cfg.AutoCreateSubtitles,
+		Upscale:         cfg.AutoUpscale,
+		Resolution:      cfg.AutoResolution,
 		DeleteSource:    sysCfg.DeleteSource,
 		VerifyOutput:    sysCfg.VerifyOutput,
 		CreatedAt:       time.Now(),
@@ -710,7 +721,7 @@ func (s *Scanner) generateOutputPath(inputPath string, jobType jobs.JobType) str
 	ext := filepath.Ext(filename)
 	nameWithoutExt := strings.TrimSuffix(filename, ext)
 
-	outputDir := s.config.OutputDirectory
+	outputDir := s.GetConfig().OutputDirectory
 	if outputDir == "" {
 		outputDir = filepath.Dir(inputPath)
 	}
@@ -739,7 +750,7 @@ func (s *Scanner) containsExtension(extensions []string, ext string) bool {
 
 // setupWatchers configures file system watchers for all directories
 func (s *Scanner) setupWatchers() error {
-	for _, watchDir := range s.config.WatchDirectories {
+	for _, watchDir := range s.GetConfig().WatchDirectories {
 		if err := s.addWatcher(watchDir); err != nil {
 			return err
 		}
@@ -777,10 +788,16 @@ func (s *Scanner) addWatcher(watchDir WatchDirectory) error {
 func (s *Scanner) watchFiles() {
 	defer s.wg.Done()
 
-	// Capture watcher reference once to avoid re-reading s.watcher on every
-	// select iteration, which would race with UpdateConfig reassigning it.
+	// Capture the watcher and stop-channel references once, rather than
+	// re-reading s.watcher/s.stopCh on every select iteration. Stop() closes
+	// stopCh and then sets the field to nil under s.mu (#43); re-reading the
+	// field here could observe nil after the close and permanently disable
+	// this case (a nil channel is never ready), rather than the intended
+	// one-time exit. Closing a channel is visible on this already-captured
+	// value regardless of what the field is later set to.
 	s.mu.RLock()
 	w := s.watcher
+	stopCh := s.stopCh
 	s.mu.RUnlock()
 
 	if w == nil {
@@ -792,7 +809,7 @@ func (s *Scanner) watchFiles() {
 
 	for {
 		select {
-		case <-s.stopCh:
+		case <-stopCh:
 			return
 
 		case event, ok := <-w.Events:
@@ -815,16 +832,18 @@ func (s *Scanner) watchFiles() {
 
 // handleNewFile processes a newly created file
 func (s *Scanner) handleNewFile(path string) {
+	cfg := s.GetConfig()
+
 	// Pre-filter by known extension before doing expensive directory/pattern checks
 	ext := strings.ToLower(filepath.Ext(path))
-	knownExt := s.containsExtension(s.config.ExtractExtensions, ext) ||
-		s.containsExtension(s.config.OptimizeExtensions, ext)
+	knownExt := s.containsExtension(cfg.ExtractExtensions, ext) ||
+		s.containsExtension(cfg.OptimizeExtensions, ext)
 	if !knownExt {
 		return
 	}
 
 	// Find matching watch directory
-	for _, watchDir := range s.config.WatchDirectories {
+	for _, watchDir := range cfg.WatchDirectories {
 		if s.isInDirectory(path, watchDir.Path) && s.matchesPatterns(path, watchDir) {
 			s.pendingMu.Lock()
 			if _, exists := s.pending[path]; exists {
@@ -836,6 +855,10 @@ func (s *Scanner) handleNewFile(path string) {
 
 			// Wait for file age requirement if configured
 			if watchDir.MinFileAgeMinutes > 0 {
+				// Tracked in wg like every other long-lived scanner goroutine,
+				// so Stop() actually waits for it instead of returning while
+				// it's still in flight (#43).
+				s.wg.Add(1)
 				go s.delayedProcess(path, watchDir)
 			} else {
 				if s.shouldProcessFile(path, watchDir) {
@@ -852,6 +875,14 @@ func (s *Scanner) handleNewFile(path string) {
 
 // delayedProcess waits before processing a file
 func (s *Scanner) delayedProcess(path string, watchDir WatchDirectory) {
+	defer s.wg.Done()
+
+	// Captured once, not read as s.stopCh per select entry — see the same
+	// note in watchFiles (#43).
+	s.mu.RLock()
+	stopCh := s.stopCh
+	s.mu.RUnlock()
+
 	delay := time.Duration(watchDir.MinFileAgeMinutes) * time.Minute
 	log.Printf("[Scanner] Delaying processing of %s for %v", path, delay)
 
@@ -863,7 +894,7 @@ func (s *Scanner) delayedProcess(path string, watchDir WatchDirectory) {
 		if s.shouldProcessFile(path, watchDir) {
 			s.createJobForFile(path)
 		}
-	case <-s.stopCh:
+	case <-stopCh:
 		// Exit
 	}
 
@@ -876,7 +907,15 @@ func (s *Scanner) delayedProcess(path string, watchDir WatchDirectory) {
 func (s *Scanner) periodicScan() {
 	defer s.wg.Done()
 
+	// Both captured once, not re-read per select entry — see the note in
+	// watchFiles. Without this, a stopCh read as nil after Stop() races the
+	// close leaves only the ticker case live, so Stop()'s s.wg.Wait() would
+	// hang forever waiting on a goroutine that can no longer see stop (#43).
+	s.mu.RLock()
+	stopCh := s.stopCh
 	interval := time.Duration(s.config.ScanIntervalSec) * time.Second
+	s.mu.RUnlock()
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -884,7 +923,7 @@ func (s *Scanner) periodicScan() {
 
 	for {
 		select {
-		case <-s.stopCh:
+		case <-stopCh:
 			return
 		case <-ticker.C:
 			log.Println("[Scanner] Running periodic scan...")
@@ -938,13 +977,11 @@ func (s *Scanner) isAlreadyEfficientEncode(path string) bool {
 // Discover scans all watch directories and returns files that would be processed,
 // without creating any jobs.
 func (s *Scanner) Discover() ([]DiscoveredFile, error) {
-	s.mu.RLock()
-	watchDirs := s.config.WatchDirectories
-	s.mu.RUnlock()
+	cfg := s.GetConfig()
 
 	var result []DiscoveredFile
 
-	for _, watchDir := range watchDirs {
+	for _, watchDir := range cfg.WatchDirectories {
 		files, err := s.scanDirectory(watchDir)
 		if err != nil {
 			log.Printf("[Scanner] Discover: error scanning %s: %v", watchDir.Path, err)
@@ -963,9 +1000,9 @@ func (s *Scanner) Discover() ([]DiscoveredFile, error) {
 
 			ext := strings.ToLower(filepath.Ext(path))
 			var jobType string
-			if s.containsExtension(s.config.ExtractExtensions, ext) {
+			if s.containsExtension(cfg.ExtractExtensions, ext) {
 				jobType = "extract"
-			} else if s.containsExtension(s.config.OptimizeExtensions, ext) {
+			} else if s.containsExtension(cfg.OptimizeExtensions, ext) {
 				jobType = "optimize"
 			} else {
 				continue

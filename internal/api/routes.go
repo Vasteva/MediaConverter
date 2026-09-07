@@ -45,7 +45,7 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 	setup := api.Group("/setup")
 	setup.Get("/status", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
-			"isInitialized": cfg.IsInitialized,
+			"isInitialized": cfg.Snapshot().IsInitialized,
 		})
 	})
 
@@ -85,49 +85,55 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 		}
 
-		if req.AdminPassword != "" {
-			cfg.AdminPassword = req.AdminPassword
-		}
-		if req.AIProvider != "" {
-			cfg.AIProvider = req.AIProvider
-		}
-		if req.AIApiKey != "" {
-			cfg.AIApiKey = req.AIApiKey
-		}
-		if req.AIEndpoint != "" {
-			cfg.AIEndpoint = req.AIEndpoint
-		}
-		if req.AIModel != "" {
-			cfg.AIModel = req.AIModel
-		}
-		if req.LicenseKey != "" {
-			cfg.LicenseKey = req.LicenseKey
-			cfg.IsPremium = license.Validate(req.LicenseKey)
-		}
-		if req.GPUVendor != "" {
-			cfg.GPUVendor = req.GPUVendor
-		}
-		if req.QualityPreset != "" {
-			cfg.QualityPreset = req.QualityPreset
-		}
-		if req.CRF != 0 {
-			cfg.CRF = req.CRF
-		}
-		if req.SubtitleMode != "" {
-			cfg.SubtitleMode = req.SubtitleMode
-		}
-		if req.SubtitleLang != "" {
-			cfg.SubtitleLang = req.SubtitleLang
-		}
-		if req.SubtitleAPIKey != "" {
-			cfg.SubtitleAPIKey = req.SubtitleAPIKey
-		}
-		if req.SubtitleUsername != "" {
-			cfg.SubtitleUsername = req.SubtitleUsername
-		}
-		if req.SubtitlePassword != "" {
-			cfg.SubtitlePassword = req.SubtitlePassword
-		}
+		// One WithLock for every field this request touches, so a concurrent
+		// reader's Snapshot() sees either all of these changes or none of
+		// them — never, say, the new AdminPassword with the old IsPremium
+		// mid-update (#43).
+		cfg.WithLock(func() {
+			if req.AdminPassword != "" {
+				cfg.AdminPassword = req.AdminPassword
+			}
+			if req.AIProvider != "" {
+				cfg.AIProvider = req.AIProvider
+			}
+			if req.AIApiKey != "" {
+				cfg.AIApiKey = req.AIApiKey
+			}
+			if req.AIEndpoint != "" {
+				cfg.AIEndpoint = req.AIEndpoint
+			}
+			if req.AIModel != "" {
+				cfg.AIModel = req.AIModel
+			}
+			if req.LicenseKey != "" {
+				cfg.LicenseKey = req.LicenseKey
+				cfg.IsPremium = license.Validate(req.LicenseKey)
+			}
+			if req.GPUVendor != "" {
+				cfg.GPUVendor = req.GPUVendor
+			}
+			if req.QualityPreset != "" {
+				cfg.QualityPreset = req.QualityPreset
+			}
+			if req.CRF != 0 {
+				cfg.CRF = req.CRF
+			}
+			if req.SubtitleMode != "" {
+				cfg.SubtitleMode = req.SubtitleMode
+			}
+			if req.SubtitleLang != "" {
+				cfg.SubtitleLang = req.SubtitleLang
+			}
+			if req.SubtitleAPIKey != "" {
+				cfg.SubtitleAPIKey = req.SubtitleAPIKey
+			}
+			if req.SubtitleUsername != "" {
+				cfg.SubtitleUsername = req.SubtitleUsername
+			}
+			if req.SubtitlePassword != "" {
+				cfg.SubtitlePassword = req.SubtitlePassword
+			}
+		})
 
 		if err := cfg.Save(); err != nil {
 			log.Printf("Failed to save config: %v", err)
@@ -200,17 +206,18 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		}
 
 		// Check if password is configured
-		if cfg.AdminPassword == "" {
+		adminPassword := cfg.Snapshot().AdminPassword
+		if adminPassword == "" {
 			return c.Status(500).JSON(fiber.Map{"error": "Admin password not configured"})
 		}
 
 		// Validate password
-		if req.Password != cfg.AdminPassword {
+		if req.Password != adminPassword {
 			return c.Status(401).JSON(fiber.Map{"error": "Invalid password"})
 		}
 
 		// Generate and return token
-		token := GenerateToken(cfg.AdminPassword)
+		token := GenerateToken(adminPassword)
 		return c.JSON(fiber.Map{
 			"success": true,
 			"token":   token,
@@ -300,8 +307,13 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 		}
 
+		// One snapshot for the whole request: cfg is shared, unsynchronized,
+		// with every HTTP handler that writes it and every job-worker
+		// goroutine that reads it (#43).
+		snap := cfg.Snapshot()
+
 		// Security: Validate paths to prevent arbitrary file access
-		sourcePath, err := security.ValidatePath(req.SourcePath, cfg.SourceDir)
+		sourcePath, err := security.ValidatePath(req.SourcePath, snap.SourceDir)
 		if err != nil {
 			return c.Status(403).JSON(fiber.Map{"error": err.Error()})
 		}
@@ -311,14 +323,14 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		// how already-high-resolution files got manually queued despite the
 		// filter being on. A probe failure is not grounds to refuse the job —
 		// it fails open, same as the scanner's own filter.
-		if req.Type == jobs.JobTypeOptimize && cfg.SkipHighResolution {
+		if req.Type == jobs.JobTypeOptimize && snap.SkipHighResolution {
 			ctx, cancel := context.WithTimeout(c.Context(), 10*time.Second)
 			_, height, _, _, probeErr := jm.GetVideoResolution(ctx, sourcePath)
 			cancel()
-			if probeErr == nil && height >= cfg.ResolutionHeightThreshold {
+			if probeErr == nil && height >= snap.ResolutionHeightThreshold {
 				return c.Status(400).JSON(fiber.Map{"error": fmt.Sprintf(
 					"source is %dp, at or above the configured %dp skip threshold",
-					height, cfg.ResolutionHeightThreshold)})
+					height, snap.ResolutionHeightThreshold)})
 			}
 		}
 
@@ -330,7 +342,7 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			// DestDir are allowed: an explicit destination writing back
 			// beside its source is exactly what happens below when none is
 			// given (#37).
-			validDest, err := security.ValidatePath(destPath, cfg.SourceDir, cfg.DestDir)
+			validDest, err := security.ValidatePath(destPath, snap.SourceDir, snap.DestDir)
 			if err != nil {
 				return c.Status(403).JSON(fiber.Map{"error": err.Error()})
 			}
@@ -361,8 +373,8 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			// Inherit system defaults; the source file won't be deleted unless
 			// the system config explicitly opts in (deleteSource) and, for premium
 			// users, AI verification is enabled (verifyOutput).
-			DeleteSource: cfg.DeleteSource,
-			VerifyOutput: cfg.VerifyOutput,
+			DeleteSource: snap.DeleteSource,
+			VerifyOutput: snap.VerifyOutput,
 			CreatedAt:    time.Now(),
 		}
 		jm.AddJob(job)
@@ -421,35 +433,36 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 
 	// Config
 	api.Get("/config", func(c *fiber.Ctx) error {
+		snap := cfg.Snapshot()
 		subtitleAPIKey := ""
-		if cfg.SubtitleAPIKey != "" {
-			subtitleAPIKey = security.MaskKey(cfg.SubtitleAPIKey)
+		if snap.SubtitleAPIKey != "" {
+			subtitleAPIKey = security.MaskKey(snap.SubtitleAPIKey)
 		}
 		return c.JSON(fiber.Map{
-			"sourceDir":                 cfg.SourceDir,
-			"destDir":                   cfg.DestDir,
-			"gpuVendor":                 cfg.GPUVendor,
-			"qualityPreset":             cfg.QualityPreset,
-			"crf":                       cfg.CRF,
-			"aiProvider":                cfg.AIProvider,
-			"aiApiKey":                  security.MaskKey(cfg.AIApiKey),
-			"aiEndpoint":                cfg.AIEndpoint,
-			"aiModel":                   cfg.AIModel,
-			"licenseKey":                security.MaskKey(cfg.LicenseKey),
-			"isPremium":                 cfg.IsPremium,
-			"planName":                  license.GetPlanName(cfg.LicenseKey),
-			"verifyOutput":              cfg.VerifyOutput,
-			"deleteSource":              cfg.DeleteSource,
-			"autoConvertISO":            cfg.AutoConvertISO,
-			"overrideAICRF":             cfg.OverrideAICRF,
-			"skipHighResolution":        cfg.SkipHighResolution,
-			"resolutionHeightThreshold": cfg.ResolutionHeightThreshold,
-			"subtitleMode":              cfg.SubtitleMode,
-			"subtitleLang":              cfg.SubtitleLang,
+			"sourceDir":                 snap.SourceDir,
+			"destDir":                   snap.DestDir,
+			"gpuVendor":                 snap.GPUVendor,
+			"qualityPreset":             snap.QualityPreset,
+			"crf":                       snap.CRF,
+			"aiProvider":                snap.AIProvider,
+			"aiApiKey":                  security.MaskKey(snap.AIApiKey),
+			"aiEndpoint":                snap.AIEndpoint,
+			"aiModel":                   snap.AIModel,
+			"licenseKey":                security.MaskKey(snap.LicenseKey),
+			"isPremium":                 snap.IsPremium,
+			"planName":                  license.GetPlanName(snap.LicenseKey),
+			"verifyOutput":              snap.VerifyOutput,
+			"deleteSource":              snap.DeleteSource,
+			"autoConvertISO":            snap.AutoConvertISO,
+			"overrideAICRF":             snap.OverrideAICRF,
+			"skipHighResolution":        snap.SkipHighResolution,
+			"resolutionHeightThreshold": snap.ResolutionHeightThreshold,
+			"subtitleMode":              snap.SubtitleMode,
+			"subtitleLang":              snap.SubtitleLang,
 			"subtitleApiKey":            subtitleAPIKey,
-			"subtitleUsername":          cfg.SubtitleUsername,
-			"subtitlePasswordSet":       cfg.SubtitlePassword != "",
-			"schedule":                  cfg.Schedule,
+			"subtitleUsername":          snap.SubtitleUsername,
+			"subtitlePasswordSet":       snap.SubtitlePassword != "",
+			"schedule":                  snap.Schedule,
 		})
 	})
 
@@ -479,84 +492,101 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 		}
 
-		// Update config
-		if req.QualityPreset != "" {
-			cfg.QualityPreset = req.QualityPreset
+		// Validated before the lock is ever taken: this can reject the
+		// request outright, and doing that from inside the WithLock closure
+		// below would only return from the closure, not this handler — the
+		// response would fall through to "success" regardless (#43).
+		if req.CRF != nil && (*req.CRF < 0 || *req.CRF > 51) {
+			return c.Status(400).JSON(fiber.Map{"error": "CRF must be between 0 and 51"})
 		}
-		if req.CRF != nil {
-			if *req.CRF < 0 || *req.CRF > 51 {
-				return c.Status(400).JSON(fiber.Map{"error": "CRF must be between 0 and 51"})
+
+		// One WithLock for every field this request touches, so a
+		// concurrent reader's Snapshot() sees either all of these changes
+		// or none of them. The AI-provider fields are also captured here,
+		// under the same lock, rather than re-read afterward — otherwise a
+		// second POST /api/config landing in between could mean the
+		// provider built below doesn't match what was just logged as saved.
+		var aiProvider, aiAPIKey, aiEndpoint, aiModel string
+		var isPremium bool
+		cfg.WithLock(func() {
+			if req.QualityPreset != "" {
+				cfg.QualityPreset = req.QualityPreset
 			}
-			cfg.CRF = *req.CRF
-		}
-		if req.AIProvider != "" {
-			cfg.AIProvider = req.AIProvider
-		}
+			if req.CRF != nil {
+				cfg.CRF = *req.CRF
+			}
+			if req.AIProvider != "" {
+				cfg.AIProvider = req.AIProvider
+			}
 
-		// Only update keys if they aren't masked patterns
-		if req.AIApiKey != "" && !strings.Contains(req.AIApiKey, "....") {
-			cfg.AIApiKey = req.AIApiKey
-		}
-		if req.AIEndpoint != "" {
-			cfg.AIEndpoint = req.AIEndpoint
-		}
-		if req.AIModel != "" {
-			cfg.AIModel = req.AIModel
-		}
+			// Only update keys if they aren't masked patterns
+			if req.AIApiKey != "" && !strings.Contains(req.AIApiKey, "....") {
+				cfg.AIApiKey = req.AIApiKey
+			}
+			if req.AIEndpoint != "" {
+				cfg.AIEndpoint = req.AIEndpoint
+			}
+			if req.AIModel != "" {
+				cfg.AIModel = req.AIModel
+			}
 
-		if req.LicenseKey != "" && !strings.Contains(req.LicenseKey, "....") {
-			cfg.LicenseKey = req.LicenseKey
-			cfg.IsPremium = license.Validate(req.LicenseKey)
-		}
+			if req.LicenseKey != "" && !strings.Contains(req.LicenseKey, "....") {
+				cfg.LicenseKey = req.LicenseKey
+				cfg.IsPremium = license.Validate(req.LicenseKey)
+			}
 
-		// Boolean fields — pointer check distinguishes "not sent" from false
-		if req.VerifyOutput != nil {
-			cfg.VerifyOutput = *req.VerifyOutput
-		}
-		if req.DeleteSource != nil {
-			cfg.DeleteSource = *req.DeleteSource
-		}
-		if req.AutoConvertISO != nil {
-			cfg.AutoConvertISO = *req.AutoConvertISO
-		}
-		if req.OverrideAICRF != nil {
-			cfg.OverrideAICRF = *req.OverrideAICRF
-		}
-		if req.SkipHighResolution != nil {
-			cfg.SkipHighResolution = *req.SkipHighResolution
-		}
-		if req.ResolutionHeightThreshold != nil {
-			cfg.ResolutionHeightThreshold = *req.ResolutionHeightThreshold
-		}
+			// Boolean fields — pointer check distinguishes "not sent" from false
+			if req.VerifyOutput != nil {
+				cfg.VerifyOutput = *req.VerifyOutput
+			}
+			if req.DeleteSource != nil {
+				cfg.DeleteSource = *req.DeleteSource
+			}
+			if req.AutoConvertISO != nil {
+				cfg.AutoConvertISO = *req.AutoConvertISO
+			}
+			if req.OverrideAICRF != nil {
+				cfg.OverrideAICRF = *req.OverrideAICRF
+			}
+			if req.SkipHighResolution != nil {
+				cfg.SkipHighResolution = *req.SkipHighResolution
+			}
+			if req.ResolutionHeightThreshold != nil {
+				cfg.ResolutionHeightThreshold = *req.ResolutionHeightThreshold
+			}
 
-		// Subtitle settings
-		if req.SubtitleMode != "" {
-			cfg.SubtitleMode = req.SubtitleMode
-		}
-		if req.SubtitleLang != "" {
-			cfg.SubtitleLang = req.SubtitleLang
-		}
-		if req.SubtitleAPIKey != "" && !strings.Contains(req.SubtitleAPIKey, "....") {
-			cfg.SubtitleAPIKey = req.SubtitleAPIKey
-		}
-		if req.SubtitleUsername != "" {
-			cfg.SubtitleUsername = req.SubtitleUsername
-		}
-		if req.SubtitlePassword != "" {
-			cfg.SubtitlePassword = req.SubtitlePassword
-		}
+			// Subtitle settings
+			if req.SubtitleMode != "" {
+				cfg.SubtitleMode = req.SubtitleMode
+			}
+			if req.SubtitleLang != "" {
+				cfg.SubtitleLang = req.SubtitleLang
+			}
+			if req.SubtitleAPIKey != "" && !strings.Contains(req.SubtitleAPIKey, "....") {
+				cfg.SubtitleAPIKey = req.SubtitleAPIKey
+			}
+			if req.SubtitleUsername != "" {
+				cfg.SubtitleUsername = req.SubtitleUsername
+			}
+			if req.SubtitlePassword != "" {
+				cfg.SubtitlePassword = req.SubtitlePassword
+			}
 
-		// Schedule
-		if req.Schedule != nil {
-			cfg.Schedule = *req.Schedule
-		}
+			// Schedule
+			if req.Schedule != nil {
+				cfg.Schedule = *req.Schedule
+			}
+
+			aiProvider, aiAPIKey, aiEndpoint, aiModel = cfg.AIProvider, cfg.AIApiKey, cfg.AIEndpoint, cfg.AIModel
+			isPremium = cfg.IsPremium
+		})
 
 		// Re-initialize AI provider in manager
 		newAI, err := ai.NewProvider(ai.AIConfig{
-			Provider: cfg.AIProvider,
-			APIKey:   cfg.AIApiKey,
-			Endpoint: cfg.AIEndpoint,
-			Model:    cfg.AIModel,
+			Provider: aiProvider,
+			APIKey:   aiAPIKey,
+			Endpoint: aiEndpoint,
+			Model:    aiModel,
 		})
 		if err == nil {
 			if jm != nil {
@@ -566,7 +596,7 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			log.Printf("Error updating AI provider: %v", err)
 		}
 
-		log.Printf("Configuration updated: AI Provider=%s, Premium=%v", cfg.AIProvider, cfg.IsPremium)
+		log.Printf("Configuration updated: AI Provider=%s, Premium=%v", aiProvider, isPremium)
 
 		if err := cfg.Save(); err != nil {
 			log.Printf("Failed to save config: %v", err)
@@ -596,8 +626,9 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		if strings.Contains(apiKey, "....") && len(apiKey) > 8 {
 			// If it looks masked, check if it matches the current masked key
 			// If so, rely on the stored config key
-			if apiKey == security.MaskKey(cfg.AIApiKey) {
-				apiKey = cfg.AIApiKey
+			storedKey := cfg.Snapshot().AIApiKey
+			if apiKey == security.MaskKey(storedKey) {
+				apiKey = storedKey
 			}
 		}
 
@@ -673,9 +704,14 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 				"scanIntervalSec must be at least %d seconds", scanner.MinScanIntervalSec)})
 		}
 
+		// One snapshot for the whole request: cfg is shared, unsynchronized,
+		// with every HTTP handler that writes it and every job-worker
+		// goroutine that reads it (#43).
+		snap := cfg.Snapshot()
+
 		// Security: Validate watch directories
 		for i, dir := range newCfg.WatchDirectories {
-			validPath, err := security.ValidatePath(dir.Path, cfg.SourceDir)
+			validPath, err := security.ValidatePath(dir.Path, snap.SourceDir)
 			if err != nil {
 				return c.Status(403).JSON(fiber.Map{"error": fmt.Sprintf("Watch directory %d: %v", i, err)})
 			}
@@ -684,7 +720,7 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 
 		// Security: Validate output directory
 		if newCfg.OutputDirectory != "" {
-			validOutput, err := security.ValidatePath(newCfg.OutputDirectory, cfg.DestDir)
+			validOutput, err := security.ValidatePath(newCfg.OutputDirectory, snap.DestDir)
 			if err != nil {
 				return c.Status(403).JSON(fiber.Map{"error": fmt.Sprintf("Output directory: %v", err)})
 			}
@@ -752,7 +788,7 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 	// SSE short-lived token exchange (bug #26 mitigation)
 	// Issues a 2-minute token so the long-lived session token never appears in server access logs.
 	api.Post("/events/token", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{"token": GenerateSSEToken(cfg.AdminPassword)})
+		return c.JSON(fiber.Map{"token": GenerateSSEToken(cfg.Snapshot().AdminPassword)})
 	})
 
 	// AI Search
@@ -762,7 +798,7 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			return c.Status(400).JSON(fiber.Map{"error": "Query is required"})
 		}
 
-		if !cfg.IsPremium {
+		if !cfg.Snapshot().IsPremium {
 			return c.Status(403).JSON(fiber.Map{"error": "AI Search is a premium feature"})
 		}
 
@@ -835,13 +871,17 @@ func randomString(n int) string {
 // File Browser endpoint for listing directories
 func RegisterFileBrowserRoute(api fiber.Router, cfg *config.Config) {
 	api.Get("/browse", func(c *fiber.Ctx) error {
-		path := c.Query("path", cfg.SourceDir)
+		// One snapshot for the whole request: cfg is shared, unsynchronized,
+		// with every HTTP handler that writes it and every job-worker
+		// goroutine that reads it (#43).
+		snap := cfg.Snapshot()
+		path := c.Query("path", snap.SourceDir)
 
 		// Security: Validate the path is within allowed directories
-		validPath, err := security.ValidatePath(path, cfg.SourceDir)
+		validPath, err := security.ValidatePath(path, snap.SourceDir)
 		if err != nil {
 			// Try dest dir as fallback
-			validPath, err = security.ValidatePath(path, cfg.DestDir)
+			validPath, err = security.ValidatePath(path, snap.DestDir)
 			if err != nil {
 				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Access denied: path not in allowed directories"})
 			}

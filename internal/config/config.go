@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/Vasteva/MediaConverter/internal/license"
@@ -140,6 +141,77 @@ type Config struct {
 	// lastMerge records how the environment and the persisted file were
 	// reconciled at load time, for diagnostics.
 	lastMerge *merger `json:"-"`
+
+	// mu guards every field above from concurrent read/write once the server
+	// is serving requests (#43): one *Config is shared, unsynchronized,
+	// between the HTTP handlers that write it (POST /api/config and friends)
+	// and every job-worker goroutine and scanner scan that reads it mid-job.
+	// A pointer, not an embedded sync.RWMutex, so Config stays copyable by
+	// value (see Snapshot) without `go vet`'s copylocks check firing on the
+	// copy itself.
+	//
+	// Nil-tolerant: Load() always sets it, but plenty of tests construct a
+	// bare &Config{...} directly, and it would be needless churn to make
+	// every one of them set a mutex they don't need. Lock/Unlock/RLock/
+	// RUnlock/Snapshot all treat a nil mu as "no concurrent access to guard
+	// against" rather than panicking.
+	mu *sync.RWMutex `json:"-"`
+}
+
+// WithLock runs fn while holding the write lock, so several related field
+// changes — see POST /api/config and POST /api/setup/complete — are seen by
+// readers all-or-nothing instead of a Snapshot landing mid-update.
+//
+// Deliberately not exported as Lock/Unlock: a type with methods named
+// exactly that satisfies sync.Locker, and go vet's copylocks check then
+// flags every copy of *any* Config value — including Snapshot's own return,
+// which is the copy this whole mechanism exists to make safe. Named
+// differently, none of that fires, and the closure shape also makes it
+// impossible to take the lock and forget to release it.
+//
+// A nil mu (a Config built directly, e.g. in a test, rather than via Load)
+// makes this a no-op rather than a nil-pointer panic.
+func (c *Config) WithLock(fn func()) {
+	if c.mu == nil {
+		fn()
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	fn()
+}
+
+func (c *Config) rLock() {
+	if c.mu != nil {
+		c.mu.RLock()
+	}
+}
+
+func (c *Config) rUnlock() {
+	if c.mu != nil {
+		c.mu.RUnlock()
+	}
+}
+
+// Snapshot returns a point-in-time copy of the config, safe to read from
+// without further locking. Callers should take exactly one snapshot at the
+// start of the request or job they're handling and read every field from
+// that local copy from then on, rather than re-reading the shared Config
+// repeatedly — the copy can never be mutated out from under you mid-job, and
+// it's one lock acquisition instead of one per field.
+func (c *Config) Snapshot() Config {
+	c.rLock()
+	defer c.rUnlock()
+	cp := *c
+	// The one field that's a reference type — without this the copy would
+	// still alias the original's backing array, defeating the point.
+	cp.Schedule.AllowedDays = append([]int(nil), c.Schedule.AllowedDays...)
+	// A snapshot is a plain, inert value. Without this it would carry the
+	// same *sync.RWMutex as the live Config it was copied from, so calling
+	// Lock/Snapshot again on the snapshot would silently reach back into the
+	// original's lock instead of no-op'ing like every other bare value does.
+	cp.mu = nil
+	return cp
 }
 
 // ConfigFile is the persisted settings path. Overridable via CONFIG_FILE, for
@@ -150,6 +222,7 @@ var ConfigFile = getEnv("CONFIG_FILE", "/data/config.json")
 func Load() *Config {
 	// Default values
 	cfg := &Config{
+		mu:                        &sync.RWMutex{},
 		SchemaVersion:             currentSchemaVersion,
 		Port:                      getEnv("PORT", "8080"),
 		SourceDir:                 getEnv("SOURCE_DIR", "/storage"),
@@ -293,7 +366,9 @@ func (c *Config) loadFromDisk() error {
 }
 
 func (c *Config) Save() error {
+	c.rLock()
 	data, err := json.MarshalIndent(c, "", "  ")
+	c.rUnlock()
 	if err != nil {
 		return err
 	}
@@ -325,7 +400,7 @@ func (c *Config) MarkInitialized() error {
 		return err
 	}
 	initFile := filepath.Join(dir, ".initialized")
-	c.IsInitialized = true
+	c.WithLock(func() { c.IsInitialized = true })
 	return os.WriteFile(initFile, []byte(time.Now().Format(time.RFC3339)), 0600)
 }
 

@@ -12,6 +12,11 @@ import (
 // AuthMiddleware creates a middleware that checks for a valid session token
 func AuthMiddleware(cfg *config.Config) fiber.Handler {
 	return func(c *fiber.Ctx) error {
+		// One snapshot for the whole request: cfg is shared, unsynchronized,
+		// with every HTTP handler that writes it and every job-worker
+		// goroutine that reads it (#43).
+		snap := cfg.Snapshot()
+
 		// Skip for health check, login, and setup status
 		path := c.Path()
 		if path == "/api/health" || path == "/api/login" || path == "/api/setup/status" {
@@ -19,7 +24,7 @@ func AuthMiddleware(cfg *config.Config) fiber.Handler {
 		}
 
 		// If not initialized, allow all setup routes
-		if !cfg.IsInitialized && (path == "/api/setup/probes" || path == "/api/setup/complete" || path == "/api/setup/test-ai") {
+		if !snap.IsInitialized && (path == "/api/setup/probes" || path == "/api/setup/complete" || path == "/api/setup/test-ai") {
 			return c.Next()
 		}
 
@@ -39,7 +44,7 @@ func AuthMiddleware(cfg *config.Config) fiber.Handler {
 		// Validate token
 		// For simplicity without a database, we compare it against a hash of the admin password
 		// In a real production app, you'd use JWT or a proper session store.
-		if !validateToken(token, cfg.AdminPassword) {
+		if !validateToken(token, snap.AdminPassword) {
 			return c.Status(401).JSON(fiber.Map{"error": "Unauthorized: Invalid token"})
 		}
 

@@ -204,14 +204,25 @@ func (m *Manager) Stop() {
 	log.Println("Job manager stopped")
 }
 
-// GetAI returns the current AI provider
+// GetAI returns the current AI provider. UpdateAIProvider can swap it from an
+// HTTP goroutine at any time, so every reader — including internal callers —
+// goes through this rather than the m.ai field directly (#43).
 func (m *Manager) GetAI() ai.Provider {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.ai
 }
 
-// GetConfig returns the current configuration
-func (m *Manager) GetConfig() *config.Config {
-	return m.config
+// GetConfig returns a point-in-time copy of the current configuration.
+// Deliberately a value, not the shared *config.Config: that pointer is
+// mutated in place by POST /api/config from an HTTP goroutine while workers
+// and scanner scans read it, with nothing to synchronize the two (#43).
+// Field access on the returned value works exactly like it did on the old
+// pointer (cfg.SomeField), so this doesn't change any existing call site's
+// syntax — it just makes what they get back an inert snapshot instead of a
+// live, concurrently-mutable pointer.
+func (m *Manager) GetConfig() config.Config {
+	return m.config.Snapshot()
 }
 
 func (m *Manager) worker(id int) {
@@ -486,8 +497,8 @@ func (m *Manager) processJob(job *Job) {
 	m.Save()
 
 	// Premium Feature: AI Metadata Cleanup
-	if m.config.IsPremium && m.ai != nil && job.Type == JobTypeOptimize {
-		m.applyAIRename(job)
+	if aiProvider := m.GetAI(); m.config.Snapshot().IsPremium && aiProvider != nil && job.Type == JobTypeOptimize {
+		m.applyAIRename(job, aiProvider)
 	}
 
 	var err error
@@ -719,8 +730,12 @@ func (m *Manager) processJob(job *Job) {
 // confirms the joined path did not leave the destination directory. Either
 // check failing leaves the original destination untouched — a bad rename is
 // never worth failing an otherwise good transcode over.
-func (m *Manager) applyAIRename(job *Job) {
-	cleaner := meta.NewCleaner(m.ai)
+// aiProvider is passed in rather than read from m.ai internally: the caller
+// already decided to call this based on one read of the current provider,
+// and re-reading m.ai here — four more times, across a network call to the
+// model — could see UpdateAIProvider swap it mid-function otherwise (#43).
+func (m *Manager) applyAIRename(job *Job, aiProvider ai.Provider) {
+	cleaner := meta.NewCleaner(aiProvider)
 
 	job.mu.RLock()
 	sourcePath := job.SourcePath
@@ -736,7 +751,7 @@ func (m *Manager) applyAIRename(job *Job) {
 		m.appendAILog(job, AILog{
 			Timestamp:  started,
 			Operation:  "metadata_cleaning",
-			Provider:   m.ai.GetName(),
+			Provider:   aiProvider.GetName(),
 			Detail:     "Keeping original filename",
 			DurationMs: time.Since(started).Milliseconds(),
 			Success:    false,
@@ -753,7 +768,7 @@ func (m *Manager) applyAIRename(job *Job) {
 		m.appendAILog(job, AILog{
 			Timestamp:  started,
 			Operation:  "metadata_cleaning",
-			Provider:   m.ai.GetName(),
+			Provider:   aiProvider.GetName(),
 			Detail:     "Rename rejected — resolved outside the destination directory",
 			DurationMs: time.Since(started).Milliseconds(),
 			Success:    false,
@@ -771,7 +786,7 @@ func (m *Manager) applyAIRename(job *Job) {
 	m.appendAILog(job, AILog{
 		Timestamp:  started,
 		Operation:  "metadata_cleaning",
-		Provider:   m.ai.GetName(),
+		Provider:   aiProvider.GetName(),
 		Detail:     fmt.Sprintf("Renamed via %s: '%s' → '%s'", source, filename, cleanTitle),
 		DurationMs: time.Since(started).Milliseconds(),
 		Success:    true,
@@ -779,7 +794,7 @@ func (m *Manager) applyAIRename(job *Job) {
 }
 
 func (m *Manager) isInScheduleWindow() bool {
-	sched := m.config.Schedule
+	sched := m.config.Snapshot().Schedule
 	if !sched.Enabled {
 		return true
 	}
@@ -987,6 +1002,14 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 		return false, fmt.Errorf("ffmpeg wrapper not initialized")
 	}
 
+	// One snapshot for this job's whole run, rather than re-reading m.config
+	// (and m.ai) at each of the ~15 points below that need a setting. A job
+	// can run for hours; POST /api/config changing CRF or swapping the AI
+	// provider midway through must not be able to tear what a single
+	// encode's decisions are based on (#43).
+	cfg := m.config.Snapshot()
+	aiProvider := m.GetAI()
+
 	log.Printf("[Job %s] Starting optimization: %s", job.ID, sourcePath)
 
 	// 1. Probe the source. Everything downstream — encoder profile, colour
@@ -1007,7 +1030,7 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 	// generational loss for no size benefit. The two are distinguished by
 	// error type: a skip is not a failure, and completes the job rather than
 	// retrying or failing it.
-	if err := media.CheckSourceSupported(info, m.config.DensityFloor); err != nil {
+	if err := media.CheckSourceSupported(info, cfg.DensityFloor); err != nil {
 		var skipErr *media.SkipEncodeError
 		if errors.As(err, &skipErr) {
 			log.Printf("[Job %s] %s", job.ID, skipErr.Reason)
@@ -1038,10 +1061,10 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 	}
 
 	// 2. Premium Feature: AI Adaptive Encoding
-	crf := m.config.CRF
+	crf := cfg.CRF
 	defaultCRF := crf
-	if m.config.IsPremium && m.ai != nil && !m.config.OverrideAICRF {
-		cleaner := meta.NewCleaner(m.ai)
+	if cfg.IsPremium && aiProvider != nil && !cfg.OverrideAICRF {
+		cleaner := meta.NewCleaner(aiProvider)
 		log.Printf("[Premium] AI analyzing media for optimal encoding settings...")
 		t0Enc := time.Now()
 		// Pass a short summary rather than the full ffprobe dump: for a UHD
@@ -1058,7 +1081,7 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 				m.appendAILog(job, AILog{
 					Timestamp: t0Enc,
 					Operation: "encoding_analysis",
-					Provider:  m.ai.GetName(),
+					Provider:  aiProvider.GetName(),
 					Detail: fmt.Sprintf("Suggested CRF %d refused — more indulgent than the configured default %d on an already-%s source",
 						suggestedCRF, defaultCRF, strings.ToUpper(info.CodecName)),
 					DurationMs: time.Since(t0Enc).Milliseconds(),
@@ -1070,7 +1093,7 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 				m.appendAILog(job, AILog{
 					Timestamp:  t0Enc,
 					Operation:  "encoding_analysis",
-					Provider:   m.ai.GetName(),
+					Provider:   aiProvider.GetName(),
 					Detail:     fmt.Sprintf("Suggested CRF %d (system default: %d)", suggestedCRF, defaultCRF),
 					DurationMs: time.Since(t0Enc).Milliseconds(),
 					Success:    true,
@@ -1085,14 +1108,14 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 			m.appendAILog(job, AILog{
 				Timestamp:  t0Enc,
 				Operation:  "encoding_analysis",
-				Provider:   m.ai.GetName(),
+				Provider:   aiProvider.GetName(),
 				Detail:     fmt.Sprintf("No suggestion available — using configured CRF %d", crf),
 				DurationMs: time.Since(t0Enc).Milliseconds(),
 				Success:    true,
 				Error:      err.Error(),
 			})
 		}
-	} else if m.config.IsPremium && m.ai != nil && m.config.OverrideAICRF {
+	} else if cfg.IsPremium && aiProvider != nil && cfg.OverrideAICRF {
 		log.Printf("[Job %s] AI CRF override enabled — using configured CRF %d", job.ID, crf)
 		m.appendAILog(job, AILog{
 			Timestamp: time.Now(),
@@ -1116,7 +1139,7 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 	// validated, so the optimised file takes the source's position in the
 	// library. Without this the output lands in a flat directory that the media
 	// server does not scan, and accumulates there indefinitely.
-	replacing := m.config.ReplaceInPlace && m.config.HoldingDir != ""
+	replacing := cfg.ReplaceInPlace && cfg.HoldingDir != ""
 	var replacement replacementPaths
 	if replacing {
 		replacement = planReplacement(sourcePath, job.ID)
@@ -1124,7 +1147,7 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 		defer m.cleanupTemp(job, replacement.Temp)
 		log.Printf("[Job %s] Replace-in-place: writing %s, will become %s",
 			job.ID, filepath.Base(replacement.Temp), filepath.Base(replacement.Final))
-	} else if m.config.ReplaceInPlace {
+	} else if cfg.ReplaceInPlace {
 		log.Printf("[Job %s] REPLACE_IN_PLACE is set but HOLDING_DIR is empty — "+
 			"writing to the configured destination instead. Replacement needs somewhere "+
 			"to retain the original.", job.ID)
@@ -1137,8 +1160,8 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 	opts := media.TranscodeOptions{
 		InputPath:  sourcePath,
 		OutputPath: destPath,
-		GPUVendor:  media.GPUVendor(m.config.GPUVendor),
-		Preset:     media.QualityPreset(m.config.QualityPreset),
+		GPUVendor:  media.GPUVendor(cfg.GPUVendor),
+		Preset:     media.QualityPreset(cfg.QualityPreset),
 		CRF:        crf,
 		Upscale:    upscale,
 		Resolution: resolution,
@@ -1220,10 +1243,10 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 	// floor, replacing the source would be a regression, not an optimisation
 	// — discard the output and keep the original rather than reporting success.
 	if outInfo, statErr := os.Stat(destPath); statErr == nil &&
-		!media.MeetsSavingsFloor(info.Size, outInfo.Size(), m.config.SavingsFloor) {
+		!media.MeetsSavingsFloor(info.Size, outInfo.Size(), cfg.SavingsFloor) {
 		savingsPct := (1 - float64(outInfo.Size())/float64(info.Size)) * 100
 		detail := fmt.Sprintf("Output only %.1f%% smaller than source (floor %.0f%%) — kept original",
-			savingsPct, m.config.SavingsFloor*100)
+			savingsPct, cfg.SavingsFloor*100)
 		log.Printf("[Job %s] %s", job.ID, detail)
 		m.appendAILog(job, AILog{
 			Timestamp: time.Now(),
@@ -1248,15 +1271,15 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 	})
 
 	// 3. Subtitle Download
-	subtitleMode := m.config.SubtitleMode
+	subtitleMode := cfg.SubtitleMode
 	shouldDownload := subtitleMode == "always" || (subtitleMode == "selective" && createSubtitles)
-	if shouldDownload && m.config.SubtitleAPIKey != "" {
+	if shouldDownload && cfg.SubtitleAPIKey != "" {
 		log.Printf("[Subtitles] Attempting subtitle download for: %s", filepath.Base(destPath))
 		dl := subtitles.NewDownloader(
-			m.config.SubtitleAPIKey,
-			m.config.SubtitleUsername,
-			m.config.SubtitlePassword,
-			m.config.SubtitleLang,
+			cfg.SubtitleAPIKey,
+			cfg.SubtitleUsername,
+			cfg.SubtitlePassword,
+			cfg.SubtitleLang,
 		)
 		t0Sub := time.Now()
 		if srtContent, sErr := dl.Download(job.ctx, destPath); sErr != nil {
@@ -1292,7 +1315,7 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 					Timestamp:  t0Sub,
 					Operation:  "subtitle_download",
 					Provider:   "opensubtitles",
-					Detail:     fmt.Sprintf("Downloaded %s subtitles (OpenSubtitles)", m.config.SubtitleLang),
+					Detail:     fmt.Sprintf("Downloaded %s subtitles (OpenSubtitles)", cfg.SubtitleLang),
 					DurationMs: time.Since(t0Sub).Milliseconds(),
 					Success:    true,
 				})
@@ -1302,14 +1325,14 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 
 	// 4. Premium Feature: AI Video Verification (Safe Delete)
 	verified := false
-	if m.config.IsPremium && verifyOutput && m.ai != nil {
+	if cfg.IsPremium && verifyOutput && aiProvider != nil {
 		log.Printf("[Premium] Verifying video integrity with AI...")
 		m.updateJob(job, func(j *Job) {
 			j.StatusDetail = "Verifying"
 		})
 
 		t0Ver := time.Now()
-		if vOk, vErr := m.runVerificationFromPaths(job, sourcePath, destPath); vErr != nil {
+		if vOk, vErr := m.runVerificationFromPaths(job, sourcePath, destPath, aiProvider); vErr != nil {
 			// The check could not be run. Treat that as inconclusive rather than
 			// as a pass: the deterministic gate above already cleared the output,
 			// so keep it and complete the job, but leave Verified false so the
@@ -1318,7 +1341,7 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 			m.appendAILog(job, AILog{
 				Timestamp:  t0Ver,
 				Operation:  "verification",
-				Provider:   m.ai.GetName(),
+				Provider:   aiProvider.GetName(),
 				Detail:     "Verification could not run — output kept, source retained",
 				DurationMs: time.Since(t0Ver).Milliseconds(),
 				Success:    false,
@@ -1331,7 +1354,7 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 			m.appendAILog(job, AILog{
 				Timestamp:  t0Ver,
 				Operation:  "verification",
-				Provider:   m.ai.GetName(),
+				Provider:   aiProvider.GetName(),
 				Detail:     "FAIL — corruption detected",
 				DurationMs: time.Since(t0Ver).Milliseconds(),
 				Success:    false,
@@ -1347,7 +1370,7 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 			m.appendAILog(job, AILog{
 				Timestamp:  t0Ver,
 				Operation:  "verification",
-				Provider:   m.ai.GetName(),
+				Provider:   aiProvider.GetName(),
 				Detail:     "Video integrity verified: PASS",
 				DurationMs: time.Since(t0Ver).Milliseconds(),
 				Success:    true,
@@ -1469,7 +1492,7 @@ func (m *Manager) discardOutput(job *Job, destPath, reason string) {
 	})
 }
 
-func (m *Manager) runVerificationFromPaths(job *Job, srcPath, destPath string) (bool, error) {
+func (m *Manager) runVerificationFromPaths(job *Job, srcPath, destPath string, aiProvider ai.Provider) (bool, error) {
 	// Extract 5 frames from source and destination
 	// 0%, 25%, 50%, 75%, 90% (avoid 100% as it might be black frame)
 	timestamps := []float64{0.0, 0.25, 0.50, 0.75, 0.90}
@@ -1513,7 +1536,7 @@ func (m *Manager) runVerificationFromPaths(job *Job, srcPath, destPath string) (
 		destFrames = append(destFrames, destFrame)
 	}
 
-	return m.ai.VerifyMedia(job.ctx, srcFrames, destFrames)
+	return aiProvider.VerifyMedia(job.ctx, srcFrames, destFrames)
 }
 
 func (m *Manager) runTest(job *Job) error {

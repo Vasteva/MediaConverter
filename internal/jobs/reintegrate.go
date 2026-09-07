@@ -76,7 +76,7 @@ func holdingPathFor(holdingDir, sourceRoot, sourcePath string) string {
 // The original is moved rather than deleted so a bad batch can be reversed by
 // moving the holding directory back. Nothing here removes it.
 func (m *Manager) reintegrate(job *Job, paths replacementPaths) error {
-	cfg := m.config
+	cfg := m.config.Snapshot()
 
 	holdingPath := holdingPathFor(cfg.HoldingDir, cfg.SourceDir, paths.Source)
 	if err := os.MkdirAll(filepath.Dir(holdingPath), 0o755); err != nil {
@@ -124,7 +124,8 @@ func (m *Manager) reintegrate(job *Job, paths replacementPaths) error {
 
 // fileOwnership returns the uid/gid that written files should carry.
 func (m *Manager) fileOwnership() util.FileOwnership {
-	return util.FileOwnership{UID: m.config.PUID, GID: m.config.PGID}
+	cfg := m.config.Snapshot()
+	return util.FileOwnership{UID: cfg.PUID, GID: cfg.PGID}
 }
 
 // cleanupTemp removes a leftover temp transcode. Safe to call unconditionally.
