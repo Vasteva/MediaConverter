@@ -485,6 +485,16 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			"subtitleUsername":          snap.SubtitleUsername,
 			"subtitlePasswordSet":       snap.SubtitlePassword != "",
 			"schedule":                  snap.Schedule,
+			// maxConcurrentJobs is read-write here but only takes effect on
+			// the next restart — see the restartRequired flag on POST
+			// /api/config's response (#51).
+			"maxConcurrentJobs": snap.MaxConcurrentJobs,
+			"replaceInPlace":    snap.ReplaceInPlace,
+			"holdingDir":        snap.HoldingDir,
+			"puid":              snap.PUID,
+			"pgid":              snap.PGID,
+			"savingsFloor":      snap.SavingsFloor,
+			"densityFloor":      snap.DensityFloor,
 		})
 	})
 
@@ -509,6 +519,14 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			SubtitleUsername          string                     `json:"subtitleUsername"`
 			SubtitlePassword          string                     `json:"subtitlePassword"`
 			Schedule                  *config.ProcessingSchedule `json:"schedule"`
+			GPUVendor                 string                     `json:"gpuVendor"`
+			MaxConcurrentJobs         *int                       `json:"maxConcurrentJobs"`
+			ReplaceInPlace            *bool                      `json:"replaceInPlace"`
+			HoldingDir                string                     `json:"holdingDir"`
+			PUID                      *int                       `json:"puid"`
+			PGID                      *int                       `json:"pgid"`
+			SavingsFloor              *float64                   `json:"savingsFloor"`
+			DensityFloor              *float64                   `json:"densityFloor"`
 		}
 		if err := c.BodyParser(&req); err != nil {
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
@@ -520,6 +538,34 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		// response would fall through to "success" regardless (#43).
 		if req.CRF != nil && (*req.CRF < 0 || *req.CRF > 51) {
 			return c.Status(400).JSON(fiber.Map{"error": "CRF must be between 0 and 51"})
+		}
+		if req.GPUVendor != "" {
+			switch req.GPUVendor {
+			case "cpu", "nvidia", "intel", "amd":
+			default:
+				return c.Status(400).JSON(fiber.Map{"error": "gpuVendor must be one of: cpu, nvidia, intel, amd"})
+			}
+		}
+		// MaxConcurrentJobs is snapshotted once into Manager.maxConcurrent at
+		// startup and never re-read (#51) — accepted and persisted here so it
+		// takes effect on the next restart, but never silently, hence the
+		// separate "restartRequired" flag in the response below rather than a
+		// plain "success" that would look identical to every other field's
+		// immediate effect.
+		if req.MaxConcurrentJobs != nil && *req.MaxConcurrentJobs < 1 {
+			return c.Status(400).JSON(fiber.Map{"error": "maxConcurrentJobs must be at least 1"})
+		}
+		if req.PUID != nil && *req.PUID < -1 {
+			return c.Status(400).JSON(fiber.Map{"error": "puid must be -1 (leave ownership untouched) or a non-negative uid"})
+		}
+		if req.PGID != nil && *req.PGID < -1 {
+			return c.Status(400).JSON(fiber.Map{"error": "pgid must be -1 (leave ownership untouched) or a non-negative gid"})
+		}
+		if req.SavingsFloor != nil && (*req.SavingsFloor < 0 || *req.SavingsFloor > 1) {
+			return c.Status(400).JSON(fiber.Map{"error": "savingsFloor must be between 0 and 1"})
+		}
+		if req.DensityFloor != nil && *req.DensityFloor < 0 {
+			return c.Status(400).JSON(fiber.Map{"error": "densityFloor must not be negative"})
 		}
 
 		// One WithLock for every field this request touches, so a
@@ -599,6 +645,31 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 				cfg.Schedule = *req.Schedule
 			}
 
+			if req.GPUVendor != "" {
+				cfg.GPUVendor = req.GPUVendor
+			}
+			if req.MaxConcurrentJobs != nil {
+				cfg.MaxConcurrentJobs = *req.MaxConcurrentJobs
+			}
+			if req.ReplaceInPlace != nil {
+				cfg.ReplaceInPlace = *req.ReplaceInPlace
+			}
+			if req.HoldingDir != "" {
+				cfg.HoldingDir = req.HoldingDir
+			}
+			if req.PUID != nil {
+				cfg.PUID = *req.PUID
+			}
+			if req.PGID != nil {
+				cfg.PGID = *req.PGID
+			}
+			if req.SavingsFloor != nil {
+				cfg.SavingsFloor = *req.SavingsFloor
+			}
+			if req.DensityFloor != nil {
+				cfg.DensityFloor = *req.DensityFloor
+			}
+
 			aiProvider, aiAPIKey, aiEndpoint, aiModel = cfg.AIProvider, cfg.AIApiKey, cfg.AIEndpoint, cfg.AIModel
 			isPremium = cfg.IsPremium
 		})
@@ -624,7 +695,16 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			log.Printf("Failed to save config: %v", err)
 		}
 
-		return c.JSON(fiber.Map{"success": true})
+		return c.JSON(fiber.Map{
+			"success": true,
+			// True when this request changed a field the running process
+			// only reads once at startup — MaxConcurrentJobs, snapshotted
+			// into Manager.maxConcurrent and never re-read (#51). The saved
+			// value takes effect on the next restart; nothing else in this
+			// response distinguishes that from every other field's
+			// immediate effect.
+			"restartRequired": req.MaxConcurrentJobs != nil,
+		})
 	})
 
 	// Test AI Connection

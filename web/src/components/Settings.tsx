@@ -3,7 +3,7 @@ import type { SystemConfig, ProcessingSchedule } from '../types';
 
 interface SettingsProps {
     config: SystemConfig | null;
-    onConfigUpdate: (newConfig: Partial<SystemConfig>) => Promise<boolean>;
+    onConfigUpdate: (newConfig: Partial<SystemConfig>) => Promise<{ ok: boolean; restartRequired?: boolean }>;
     token: string | null;
 }
 
@@ -13,6 +13,7 @@ export default function Settings({ config: initialConfig, onConfigUpdate, token 
     const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
     const [testMessage, setTestMessage] = useState('');
     const [saveError, setSaveError] = useState<string | null>(null);
+    const [restartNotice, setRestartNotice] = useState(false);
     const [subtitlePassword, setSubtitlePassword] = useState('');
 
     const testStatusRef = useRef(testStatus);
@@ -31,9 +32,11 @@ export default function Settings({ config: initialConfig, onConfigUpdate, token 
     const handleSave = async (updates: Partial<SystemConfig>) => {
         setIsSaving(true);
         setSaveError(null);
-        const ok = await onConfigUpdate(updates);
-        if (!ok) {
+        const result = await onConfigUpdate(updates);
+        if (!result.ok) {
             setSaveError('Failed to save settings. Please try again.');
+        } else if (result.restartRequired) {
+            setRestartNotice(true);
         }
         setIsSaving(false);
     };
@@ -118,6 +121,12 @@ export default function Settings({ config: initialConfig, onConfigUpdate, token 
                 </div>
             )}
 
+            {restartNotice && (
+                <div className="alert alert-warning mt-4">
+                    <p>Saved — Max Concurrent Jobs only takes effect after the container restarts.</p>
+                </div>
+            )}
+
             <div className="grid grid-2 mt-4">
                 {/* Encoding Settings */}
                 <div className="card">
@@ -131,13 +140,28 @@ export default function Settings({ config: initialConfig, onConfigUpdate, token 
                                 <select
                                     className="input select"
                                     value={config.gpuVendor}
-                                    disabled
+                                    onChange={(e) => handleSave({ gpuVendor: e.target.value })}
+                                    disabled={isSaving}
                                 >
                                     <option value="cpu">CPU</option>
                                     <option value="nvidia">NVIDIA</option>
                                     <option value="intel">Intel</option>
                                     <option value="amd">AMD</option>
                                 </select>
+                            </div>
+
+                            <div className="setting-item">
+                                <label className="setting-label">Max Concurrent Jobs</label>
+                                <input
+                                    type="number"
+                                    className="input"
+                                    value={config.maxConcurrentJobs ?? 1}
+                                    onChange={(e) => setConfig({ ...config, maxConcurrentJobs: parseInt(e.target.value) || 1 })}
+                                    onBlur={(e) => handleSave({ maxConcurrentJobs: parseInt(e.target.value) || 1 })}
+                                    disabled={isSaving}
+                                    min="1"
+                                />
+                                <span className="text-xs text-secondary mt-1">How many transcodes run at once. Requires a container restart to take effect.</span>
                             </div>
 
                             <div className="setting-item">
@@ -217,6 +241,37 @@ export default function Settings({ config: initialConfig, onConfigUpdate, token 
                                         <span className="text-xs text-secondary mt-1"> Files with video height ≥ this value will be skipped (e.g. 1080 skips 1080p+)</span>
                                     </div>
                                 )}
+                            </div>
+
+                            <div className="setting-item">
+                                <label className="setting-label">Minimum Savings</label>
+                                <input
+                                    type="number"
+                                    className="input"
+                                    value={config.savingsFloor ?? 0.15}
+                                    onChange={(e) => setConfig({ ...config, savingsFloor: parseFloat(e.target.value) })}
+                                    onBlur={(e) => handleSave({ savingsFloor: parseFloat(e.target.value) || 0 })}
+                                    disabled={isSaving}
+                                    min="0"
+                                    max="1"
+                                    step="0.01"
+                                />
+                                <span className="text-xs text-secondary mt-1">Fraction smaller than the source an output must be to keep (0.15 = 15%). Below this, the original is retained instead.</span>
+                            </div>
+
+                            <div className="setting-item">
+                                <label className="setting-label">Already-Efficient Threshold</label>
+                                <input
+                                    type="number"
+                                    className="input"
+                                    value={config.densityFloor ?? 0.06}
+                                    onChange={(e) => setConfig({ ...config, densityFloor: parseFloat(e.target.value) })}
+                                    onBlur={(e) => handleSave({ densityFloor: parseFloat(e.target.value) || 0 })}
+                                    disabled={isSaving}
+                                    min="0"
+                                    step="0.01"
+                                />
+                                <span className="text-xs text-secondary mt-1">Bits/pixel/frame at or below which an HEVC/AV1 source is skipped as already efficient, rather than re-encoded.</span>
                             </div>
                         </div>
                     </div>
@@ -395,6 +450,87 @@ export default function Settings({ config: initialConfig, onConfigUpdate, token 
                         <p className="text-sm text-secondary">
                             <strong>Pro Tip:</strong> Using a local model with <strong>Ollama</strong> or a fast cloud model like <strong>Gemini Flash</strong> is recommended for real-time media analysis.
                         </p>
+                    </div>
+                </div>
+            </div>
+
+            {/* Storage & File Handling */}
+            <div className="card mt-4">
+                <div className="card-header">
+                    <h3 className="card-title">Storage &amp; File Handling</h3>
+                </div>
+                <div className="card-body">
+                    <div className="grid grid-2 gap-4">
+                        <div className="setting-item">
+                            <label className="setting-label">Source Directory</label>
+                            <input type="text" className="input" value={config.sourceDir} disabled />
+                            <span className="text-xs text-secondary mt-1">Set via the SOURCE_DIR environment variable — changing it requires updating your Docker volume mounts and restarting.</span>
+                        </div>
+
+                        <div className="setting-item">
+                            <label className="setting-label">Destination Directory</label>
+                            <input type="text" className="input" value={config.destDir} disabled />
+                            <span className="text-xs text-secondary mt-1">Set via the DEST_DIR environment variable — same restart/remount caveat as Source Directory.</span>
+                        </div>
+
+                        <div className="setting-item">
+                            <label className="setting-label">Replace Source In Place</label>
+                            <label className="flex items-center gap-2 cursor-pointer mt-2">
+                                <input
+                                    type="checkbox"
+                                    className="checkbox"
+                                    checked={config.replaceInPlace ?? false}
+                                    onChange={(e) => handleSave({ replaceInPlace: e.target.checked })}
+                                    disabled={isSaving}
+                                />
+                                <span className="text-sm">Put the validated transcode in the source's place in the library</span>
+                            </label>
+                            <p className="text-xs text-secondary mt-1">
+                                The original is moved to Holding Directory below, never deleted, so a bad batch can be reversed. Requires Holding Directory to be set.
+                            </p>
+                        </div>
+
+                        <div className="setting-item">
+                            <label className="setting-label">Holding Directory</label>
+                            <input
+                                type="text"
+                                className="input"
+                                value={config.holdingDir || ''}
+                                placeholder="/storage/.vastiva-replaced"
+                                onChange={(e) => setConfig({ ...config, holdingDir: e.target.value })}
+                                onBlur={(e) => handleSave({ holdingDir: e.target.value })}
+                                disabled={isSaving}
+                            />
+                            <span className="text-xs text-secondary mt-1">Where replaced originals are parked. Replacement is skipped entirely unless this is set.</span>
+                        </div>
+
+                        <div className="setting-item">
+                            <label className="setting-label">File Owner (PUID)</label>
+                            <input
+                                type="number"
+                                className="input"
+                                value={config.puid ?? -1}
+                                onChange={(e) => setConfig({ ...config, puid: parseInt(e.target.value) })}
+                                onBlur={(e) => handleSave({ puid: parseInt(e.target.value) })}
+                                disabled={isSaving}
+                                min="-1"
+                            />
+                            <span className="text-xs text-secondary mt-1">uid for files this process writes. -1 leaves ownership untouched.</span>
+                        </div>
+
+                        <div className="setting-item">
+                            <label className="setting-label">File Group (PGID)</label>
+                            <input
+                                type="number"
+                                className="input"
+                                value={config.pgid ?? -1}
+                                onChange={(e) => setConfig({ ...config, pgid: parseInt(e.target.value) })}
+                                onBlur={(e) => handleSave({ pgid: parseInt(e.target.value) })}
+                                disabled={isSaving}
+                                min="-1"
+                            />
+                            <span className="text-xs text-secondary mt-1">gid for files this process writes. -1 leaves ownership untouched.</span>
+                        </div>
                     </div>
                 </div>
             </div>

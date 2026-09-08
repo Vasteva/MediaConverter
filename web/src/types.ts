@@ -72,6 +72,16 @@ export interface SystemConfig {
     subtitlePassword?: string;    // write-only — never returned by GET /api/config
     subtitlePasswordSet?: boolean; // true when a password has been saved (replaces the value for display)
     schedule?: ProcessingSchedule;
+    // maxConcurrentJobs takes effect only on the next restart — Manager
+    // snapshots it once at startup and never re-reads it. POST /api/config
+    // reports this via a separate restartRequired flag, not a field here.
+    maxConcurrentJobs?: number;
+    replaceInPlace?: boolean;
+    holdingDir?: string;
+    puid?: number; // -1 leaves file ownership untouched
+    pgid?: number;
+    savingsFloor?: number; // 0-1, e.g. 0.15 = output must be >=15% smaller to keep
+    densityFloor?: number; // bits/pixel/frame at or below which a source is already efficient
 }
 export interface WatchDirectory {
     path: string;

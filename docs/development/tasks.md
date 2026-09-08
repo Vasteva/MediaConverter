@@ -4,11 +4,12 @@
 
 ## 📋 Executive Summary
 
-Three open issues, all Low severity, from a full source review on 2026-09-04
-combined with findings from production testing on 2026-09-03. #35, #36–#50,
+Two open issues, both Low severity, from a full source review on 2026-09-04
+combined with findings from production testing on 2026-09-03. #35, #36–#51,
 and #54 closed within days of being filed — every Critical, High, and Medium
-item found by review, and everything found in production testing, including
-one (#54) found only by actually deploying and using the fixes.
+item found by review, every Low item but two, and everything found in
+production testing, including one (#54) found only by actually deploying and
+using the fixes.
 #37's Docker/entrypoint half is now deploy-verified on the homelab host: the
 process genuinely drops to PUID/PGID, not just in theory. VAAPI itself is still
 unconfirmed — see #37's entry for where that attempt got interrupted.
@@ -17,15 +18,21 @@ The media pipeline itself — `internal/media` (ffmpeg, progress, validate) and
 `internal/ai/meta` — is in good shape and holds up under review. Every
 concurrency issue (#43–#45), #46's silent progress stall, #47's leaked
 extract directory and reintegration overwrite, #48's permanently-excluded
-failed-job files, #49's unbounded HTTP calls, and #50's password-derived
-session tokens are now fixed and covered by regression tests that reproduce
-the original bugs (extractDir's own #47 fix, #49's `AnalyzeEncoding`
-deadline, and #50's `ProxyHeader`/`TrustedProxies` wiring are the exceptions
-— each verified by review and full-suite regression rather than a dedicated
-test, since exercising any of them needs infrastructure disproportionate to
-the size of the fix). What's left is all Low severity:
+failed-job files, #49's unbounded HTTP calls, #50's password-derived session
+tokens, and #51's unreachable config fields are now fixed and covered by
+regression tests that reproduce the original bugs (extractDir's own #47 fix,
+#49's `AnalyzeEncoding` deadline, and #50's `ProxyHeader`/`TrustedProxies`
+wiring are the exceptions — each verified by review and full-suite regression
+rather than a dedicated test, since exercising any of them needs
+infrastructure disproportionate to the size of the fix). What's left is
+housekeeping:
 
-- **Several `Config` fields are unreachable from the UI.** `MaxConcurrentJobs`,
+- **The security audit doc and README describe code that no longer matches
+  reality.** `audit.md` calls the session token "HMAC-SHA256" (it was plain
+  SHA-256, and is now a random server-side token entirely — #50) and states
+  a login limit of "10 attempts per minute" (the code has always used 5).
+  Separately, `/api/browse` and several other symbols are dead code, unused
+  by anything but still present (#52, #53).
   `ReplaceInPlace`, `HoldingDir`, `PUID`/`PGID` are absent from both `GET` and
   `POST /api/config` entirely, and `SourceDir`/`DestDir`/`GPUVendor` are
   readable but not settable outside the setup wizard (#51).
@@ -36,6 +43,61 @@ written 2026-02-27 and was not re-verified against the code before this review.
 ---
 
 ## ✅ Closed Today
+
+### 51. Not All Configurable Options Are on the Settings Page
+
+- **Status:** ✅ Resolved (2026-09-08)
+- **File:** `internal/api/routes.go`; `internal/config/config.go`;
+  `web/src/components/Settings.tsx`; `web/src/types.ts`; `web/src/App.tsx`;
+  `internal/api/config_route_test.go` (new)
+- **Details:** Several `Config` fields were unreachable from the UI: absent
+  from both `GET`/`POST /api/config` entirely (`MaxConcurrentJobs`,
+  `ReplaceInPlace`, `HoldingDir`, `PUID`, `PGID`, `SavingsFloor` (#38),
+  `DensityFloor` (#39)), or readable but not settable anywhere
+  (`GPUVendor` — the Settings dropdown existed but was hardcoded
+  `disabled`). `SourceDir`/`DestDir` turned out not to be settable via any
+  UI flow either, including the setup wizard, despite the original ticket
+  text assuming otherwise.
+- **Fix:** Classified each field per the ticket's own framework
+  (runtime-settable / restart-required / deliberately env-only) rather than
+  exposing everything as a plain editable input:
+  - **Runtime-settable, added to `GET`/`POST /api/config` and the Settings
+    UI:** `GPUVendor` (validated against the same four values the dropdown
+    already offered), `ReplaceInPlace`, `HoldingDir`, `PUID`/`PGID`
+    (validated `>= -1`, matching the existing "-1 leaves ownership
+    untouched" convention), `SavingsFloor` (validated `0-1`), `DensityFloor`
+    (validated `>= 0`). All are read fresh per job via `Snapshot()` already,
+    so none of these needed anything beyond wiring.
+  - **Restart-required:** `MaxConcurrentJobs` is snapshotted once into
+    `Manager.maxConcurrent` at construction and never re-read — a
+    resizable worker pool is a real feature, not a config-exposure fix, so
+    out of scope here. Exposed as read-write regardless (validated `>= 1`),
+    with `POST /api/config`'s response carrying a new `restartRequired`
+    flag set only when this field was part of the request, so the UI can
+    say so explicitly instead of implying an effect that hasn't happened
+    yet. Settings.tsx shows a banner on that flag.
+  - **Deliberately env-only:** `SourceDir`/`DestDir` are container
+    bind-mount paths (`docker-compose.yml`'s `volumes:`) that the app has
+    no ability to remount at runtime — accepting new values for them would
+    update `cfg.SourceDir`/`DestDir` (used by `security.ValidatePath`,
+    scanner defaults, job creation) while the actual filesystem content
+    stayed wherever the old mount pointed, a worse outcome than leaving
+    them unreachable. Added to the Settings UI as disabled, read-only
+    fields with an explanatory note, rather than left invisible — the
+    ticket's own ask ("show that state in the UI rather than silently
+    ignoring input") applies to *why not*, not just *how*.
+- **Tests:** `TestPostConfigExposesPreviouslyUnreachableFields` round-trips
+  every newly-writable field through `POST` then `GET`.
+  `TestPostConfigRestartRequiredOnlyForMaxConcurrentJobs` confirms the flag
+  doesn't fire for an unrelated field. `TestPostConfigValidatesNewFields`
+  table-tests each new validation rule. `GPUVendor`/`MaxConcurrentJobs`/
+  `HoldingDir`/`PUID` were additionally verified by hand end-to-end: ran the
+  real server and Vite dev server together, logged in through the actual
+  UI, changed each field, confirmed the value round-tripped through a page
+  reload by reading `GET /api/config` directly, and confirmed the restart
+  banner appears exactly when `maxConcurrentJobs` is saved and not
+  otherwise. `npm run build`/`lint` clean. `gofmt -l .`, `go vet ./...`,
+  `go build ./...`, and `go test -race -count=1 ./...` all clean.
 
 ### 50. Session Tokens and Rate Limiting
 
@@ -852,27 +914,6 @@ written 2026-02-27 and was not re-verified against the code before this review.
 
 ## 🟢 Low
 
-### 51. Not All Configurable Options Are on the Settings Page
-
-- **Status:** 🟢 Open
-- **File:** `internal/api/routes.go`; `web/src/components/Settings.tsx`; `internal/config/config.go`
-- **Details:** Several `Config` fields are unreachable from the UI.
-  - Absent from both `GET` and `POST /api/config`: `MaxConcurrentJobs` (also
-    snapshotted at `NewManager`, so it needs a restart or a resizable worker
-    pool), `ReplaceInPlace`, `HoldingDir`, `PUID`, `PGID`.
-  - Readable but not settable outside the setup wizard: `SourceDir`, `DestDir`,
-    `GPUVendor`.
-  - New fields from this review that must land here too: savings floor (#38),
-    bitrate-density filter (#39). The AI CRF toggle (#40) and
-    `skipHighResolution`/threshold (#41) already landed here as part of their
-    own fixes rather than waiting on this ticket.
-- **Fix:** For each field decide runtime-settable, restart-required, or
-  deliberately env-only, and show that state in the UI rather than silently
-  ignoring input.
-- **Sequencing:** #43 (the config mutex) is now landed — any new field this
-  ticket exposes just needs to be read/written through `Snapshot()`/`WithLock`
-  like every other field, rather than widening an unguarded race.
-
 ### 52. Documentation Contradicts the Code
 
 - **Status:** 🟢 Open
@@ -965,8 +1006,8 @@ that gate never reached.
 | 🔴 Critical | 0 | 7 |
 | 🟠 High | 0 | 15 |
 | 🟡 Medium | 0 | 13 |
-| 🟢 Low | 3 | 17 |
-| **Total** | **3** | **52** |
+| 🟢 Low | 2 | 18 |
+| **Total** | **2** | **53** |
 
 ---
 
@@ -974,10 +1015,10 @@ that gate never reached.
 
 1. ~~**#35**~~, ~~**#36**~~, ~~**#37**~~, ~~**#38**~~, ~~**#39**~~, ~~**#40**~~,
    ~~**#41**~~, ~~**#42**~~, ~~**#43**~~, ~~**#44**~~, ~~**#45**~~, ~~**#46**~~,
-   ~~**#47**~~, ~~**#48**~~, ~~**#49**~~, ~~**#50**~~, ~~**#54**~~ — done.
-   #37's entrypoint is now deploy-verified; VAAPI itself still isn't
+   ~~**#47**~~, ~~**#48**~~, ~~**#49**~~, ~~**#50**~~, ~~**#51**~~, ~~**#54**~~
+   — done. #37's entrypoint is now deploy-verified; VAAPI itself still isn't
    confirmed — see its entry above.
-2. **#51** (which can now build on #43's `Snapshot()`), **#52**, **#53**.
+2. **#52**, **#53**.
 
 ---
 

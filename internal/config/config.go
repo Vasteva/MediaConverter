@@ -106,14 +106,12 @@ type Config struct {
 
 	// SavingsFloor is the minimum fraction (0.15 == 15%) an output must be
 	// smaller than its source to be kept; below it the output is discarded and
-	// the original retained. Not yet exposed on GET/POST /api/config or the
-	// settings UI — see #51, sequenced after the config mutex fix in #43 so
-	// this doesn't become one more field mutated without synchronisation.
+	// the original retained.
 	SavingsFloor float64 `json:"savingsFloor"` // Default: 0.15
 
 	// DensityFloor is the bits-per-pixel-per-frame density at or below which
 	// an HEVC/AV1 source is skipped rather than re-encoded — see
-	// media.IsAlreadyEfficient. Same exposure caveat as SavingsFloor above.
+	// media.IsAlreadyEfficient.
 	DensityFloor float64 `json:"densityFloor"` // Default: 0.06
 
 	// Reintegration. With ReplaceInPlace the transcode is written beside its

@@ -325,13 +325,17 @@ function App() {
         body: JSON.stringify(newConfig),
       });
       if (response.ok) {
+        // restartRequired flags a field like maxConcurrentJobs that the
+        // running process only reads once at startup — saved, but with no
+        // effect until the container restarts (#51).
+        const data = await response.json().catch(() => ({}));
         await fetchConfigs();
-        return true;
+        return { ok: true, restartRequired: Boolean(data.restartRequired) };
       }
-      return false;
+      return { ok: false };
     } catch (error) {
       console.error('Failed to update system config:', error);
-      return false;
+      return { ok: false };
     }
   }, [authFetch, fetchConfigs]);
 
