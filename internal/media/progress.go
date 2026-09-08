@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -199,9 +200,37 @@ func (m *stderrMonitor) Tail() string {
 	return string(m.tail)
 }
 
+// scanLinesOrCR splits on \n or \r, whichever comes first.
+//
+// FFmpeg writes two things to this same stderr stream: `-progress pipe:2`'s
+// `key=value\n` lines, and the human-readable `-stats` line, which is
+// rewritten in place with `\r` and never terminated by `\n`. bufio.ScanLines
+// only splits on `\n`, so without this it treats the entire multi-hour
+// `-stats` stream as one unterminated token — the same defect #30 already
+// fixed once in makemkv.go, and the same fix stderrMonitor.Write applies to
+// its own copy of this stream via bytes.IndexAny.
+func scanLinesOrCR(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	if i := bytes.IndexAny(data, "\r\n"); i >= 0 {
+		return i + 1, data[:i], nil
+	}
+	if atEOF {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
+
 // parseProgress parses FFmpeg progress output
 func (f *FFmpegWrapper) parseProgress(reader io.Reader, totalDuration float64, callback ProgressCallback) {
 	scanner := bufio.NewScanner(reader)
+	// The default 64 KB token cap combined with the \r-without-\n problem
+	// above meant a long enough run of un-terminated `-stats` output hit
+	// bufio.ErrTooLong and silently ended Scan() — freezing progress for the
+	// rest of the job, since scanner.Err() was never checked either (#46).
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	scanner.Split(scanLinesOrCR)
 	progress := TranscodeProgress{}
 
 	// Regex patterns for parsing
@@ -247,6 +276,9 @@ func (f *FFmpegWrapper) parseProgress(reader io.Reader, totalDuration float64, c
 		if callback != nil && progress.Frame > 0 {
 			callback(progress)
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		log.Printf("[FFmpeg] Progress scanner error: %v", err)
 	}
 }
 

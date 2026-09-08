@@ -4,8 +4,8 @@
 
 ## 📋 Executive Summary
 
-Eight open issues, from a full source review on 2026-09-04 combined with findings
-from production testing on 2026-09-03. #35, #36–#45, and #54 closed within days
+Seven open issues, from a full source review on 2026-09-04 combined with findings
+from production testing on 2026-09-03. #35, #36–#46, and #54 closed within days
 of being filed — every Critical and High item found by review, and everything
 found in production testing, including one (#54) found only by actually
 deploying and using the fixes.
@@ -16,14 +16,14 @@ unconfirmed — see #37's entry for where that attempt got interrupted.
 The media pipeline itself — `internal/media` (ffmpeg, progress, validate) and
 `internal/ai/meta` — is in good shape and holds up under review. All four
 concurrency issues (#43's shared mutable state, #44's double-processing risk,
-#45's unthrottled saves and unbounded job history) are now fixed and covered
-by regression tests that reproduce the original bugs. The remaining open work
-is all Medium/Low severity:
+#45's unthrottled saves and unbounded job history) and #46's silent progress
+stall are now fixed and covered by regression tests that reproduce the
+original bugs. The remaining open work is all Medium/Low severity:
 
-- **FFmpeg progress parsing can silently stop mid-job.** `parseProgress` has
-  no line-length cap, never checks the scanner's error, and doesn't handle
-  `\r`-terminated output — the same defect already fixed once in
-  `makemkv.go` (#46).
+- **A failed optimize after a successful extract strands a full-size MKV
+  forever.** `os.RemoveAll(extractDir)` only runs when the optimize step
+  succeeds, and separately, replacing a source can silently clobber an
+  existing file of the same output name (#47).
 
 The previous revision of this file claimed all known bugs were resolved. That was
 written 2026-02-27 and was not re-verified against the code before this review.
@@ -31,6 +31,37 @@ written 2026-02-27 and was not re-verified against the code before this review.
 ---
 
 ## ✅ Closed Today
+
+### 46. Progress Parsing Repeats the MakeMKV Scanner Bug
+
+- **Status:** ✅ Resolved (2026-09-08)
+- **File:** `internal/media/progress.go`; `internal/media/media_test.go`
+- **Details:** FFmpeg writes two things to the same stderr stream this code
+  scans: `-progress pipe:2`'s `key=value\n` lines, and the human-readable
+  `-stats` line (also explicitly passed in `buildFFmpegArgs`), which is
+  rewritten in place with `\r` and never terminated by `\n`. `parseProgress`
+  used a default `bufio.Scanner` — 64 KB token cap, splits on `\n` only, and
+  never checked `scanner.Err()` — so a long enough run of un-terminated
+  `-stats` output was read as one giant token, hit `bufio.ErrTooLong`, and
+  silently ended the scan. The transcode itself kept running to completion;
+  only the UI's progress bar and ETA froze for the rest of the job. This is
+  the identical defect already fixed once in `makemkv.go` under #30 —
+  `stderrMonitor.Write` in the same file already handles `\r` correctly for
+  its own copy of this stream, just not `parseProgress`'s.
+- **Fix:** Added `scanLinesOrCR`, a custom `bufio.SplitFunc` that splits on
+  the first of `\r` or `\n` (mirroring `stderrMonitor.Write`'s
+  `bytes.IndexAny` approach), and set it via `scanner.Split()`. Grew the
+  scanner buffer to 1 MB, matching `makemkv.go`'s #30 fix. Added a
+  `scanner.Err()` check after the scan loop that logs rather than silently
+  dropping any remaining error.
+- **Tests:** `TestParseProgressSurvivesLongUnterminatedStatsLine` feeds
+  `parseProgress` over 64 KB of `\r`-only-terminated synthetic `-stats`
+  output followed by one real `\n`-terminated progress line, and confirms
+  the callback still fires and reports the final frame. Confirmed this
+  fails against the pre-fix code (`git stash` on just `progress.go`) with
+  "scanning stopped silently", and passes with the fix. `gofmt -l .`,
+  `go vet ./...`, `go build ./...`, and `go test -race -count=1 ./...` all
+  clean.
 
 ### 45. Job State Is Rewritten Several Times a Second
 
@@ -602,17 +633,6 @@ written 2026-02-27 and was not re-verified against the code before this review.
 
 ## 🟡 Medium
 
-### 46. Progress Parsing Repeats the MakeMKV Scanner Bug
-
-- **Status:** 🟡 Open
-- **File:** `internal/media/progress.go`
-- **Details:** `parseProgress` uses a default `bufio.Scanner` (64 KB token cap),
-  never checks `scanner.Err()`, and splits on `\n` only — while FFmpeg's `-stats`
-  output is `\r`-terminated. This is the same defect fixed in `makemkv.go`
-  under #30. `stderrMonitor.Write` handles `\r` correctly in the same file.
-  Progress can silently stop mid-job.
-- **Fix:** Larger buffer, split on `\r` and `\n`, check `Err()`.
-
 ### 47. Extract Directory Leak and Reintegration Overwrite
 
 - **Status:** 🟡 Open
@@ -779,19 +799,19 @@ that gate never reached.
 |----------|------|----------|
 | 🔴 Critical | 0 | 7 |
 | 🟠 High | 0 | 15 |
-| 🟡 Medium | 5 | 8 |
+| 🟡 Medium | 4 | 9 |
 | 🟢 Low | 3 | 17 |
-| **Total** | **8** | **47** |
+| **Total** | **7** | **48** |
 
 ---
 
 ## Suggested Order
 
 1. ~~**#35**~~, ~~**#36**~~, ~~**#37**~~, ~~**#38**~~, ~~**#39**~~, ~~**#40**~~,
-   ~~**#41**~~, ~~**#42**~~, ~~**#43**~~, ~~**#44**~~, ~~**#45**~~, ~~**#54**~~ —
-   done. #37's entrypoint is now deploy-verified; VAAPI itself still isn't
-   confirmed — see its entry above.
-2. **#46, #47, #48, #49**.
+   ~~**#41**~~, ~~**#42**~~, ~~**#43**~~, ~~**#44**~~, ~~**#45**~~, ~~**#46**~~,
+   ~~**#54**~~ — done. #37's entrypoint is now deploy-verified; VAAPI itself
+   still isn't confirmed — see its entry above.
+2. **#47, #48, #49**.
 3. **#50**, then **#51** (which can now build on #43's `Snapshot()`), **#52**, **#53**.
 
 ---

@@ -2,6 +2,7 @@ package media
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -124,6 +125,38 @@ func TestEstimateETA(t *testing.T) {
 				t.Errorf("Expected ETA %s, got %s", tt.expected, eta)
 			}
 		})
+	}
+}
+
+// TestParseProgressSurvivesLongUnterminatedStatsLine covers #46: FFmpeg's
+// -stats output rewrites a single line in place using \r and no \n. Before
+// this fix, bufio.Scanner's default \n-only split treated the whole,
+// continuously-rewritten stats stream as one unterminated token — once that
+// token crossed the default 64 KB cap, Scan() failed and every progress
+// update for the rest of the job silently stopped, the same defect #30
+// already fixed once in makemkv.go.
+func TestParseProgressSurvivesLongUnterminatedStatsLine(t *testing.T) {
+	var stats strings.Builder
+	// Simulate FFmpeg rewriting one -stats line in place via \r, well past
+	// the old 64 KB single-token cap.
+	for stats.Len() < 100*1024 {
+		stats.WriteString("frame=  100 fps=24.0 q=28.0 size=    2048kB time=00:00:04.00 bitrate=4194.3kbits/s speed=1.0x   \r")
+	}
+	// The real progress data arrives afterward, on its own \n-terminated
+	// line, like FFmpeg's separate `-progress pipe:2` output.
+	stats.WriteString("frame=200 fps=24.0 bitrate=4096kbits/s size=4096kB time=00:00:08.00 speed=1.0x\n")
+
+	var got []TranscodeProgress
+	f := &FFmpegWrapper{}
+	f.parseProgress(strings.NewReader(stats.String()), 3600, func(p TranscodeProgress) {
+		got = append(got, p)
+	})
+
+	if len(got) == 0 {
+		t.Fatal("expected at least one progress callback, got none — scanning stopped silently")
+	}
+	if last := got[len(got)-1]; last.Frame != 200 {
+		t.Errorf("last reported frame = %d, want 200 — the line after the long \\r run was never scanned", last.Frame)
 	}
 }
 
