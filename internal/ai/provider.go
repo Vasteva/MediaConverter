@@ -3,7 +3,17 @@ package ai
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"time"
 )
+
+// httpClient is shared by every provider's HTTP calls. http.DefaultClient has
+// no Timeout at all, so an unresponsive endpoint — most concretely a local
+// Ollama instance that has hung — blocked its caller forever; on the job
+// path (#49) that meant a stuck worker, not just a stuck request. 120s is
+// generous enough for a slow local model's chat completion or a Whisper
+// transcription request, while still bounding the wait to something finite.
+var httpClient = &http.Client{Timeout: 120 * time.Second}
 
 // Provider defines the interface for AI backends
 type Provider interface {

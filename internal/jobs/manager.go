@@ -1243,7 +1243,17 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 		// Pass a short summary rather than the full ffprobe dump: for a UHD
 		// REMUX with 48 streams the raw JSON is tens of kilobytes that bury the
 		// few facts the decision actually turns on.
-		if suggestedCRF, err := cleaner.AnalyzeEncoding(job.ctx, info.EncodingSummary()); err == nil {
+		//
+		// job.ctx alone carries no deadline — only cancellation — so an
+		// unresponsive provider would otherwise stall this worker for as long
+		// as the shared HTTP client's own timeout allows. This suggestion is
+		// optional (the fallback below is the configured CRF, already a good
+		// answer), so it gets a much shorter bound of its own rather than
+		// borrowing that general-purpose one (#49).
+		analyzeCtx, cancelAnalyze := context.WithTimeout(job.ctx, 30*time.Second)
+		suggestedCRF, err := cleaner.AnalyzeEncoding(analyzeCtx, info.EncodingSummary())
+		cancelAnalyze()
+		if err == nil {
 			// A suggestion more indulgent than the configured default on a
 			// source already in this pipeline's target codec is how a REMUX
 			// got re-encoded at CRF 20 — near-transparent — and inflated

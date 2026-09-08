@@ -52,7 +52,7 @@ func (p *ClaudeProvider) Analyze(ctx context.Context, prompt string) (string, er
 	req.Header.Set("x-api-key", p.APIKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}

@@ -57,7 +57,7 @@ func (p *GeminiProvider) Analyze(ctx context.Context, prompt string) (string, er
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -150,7 +150,7 @@ func (p *GeminiProvider) VerifyMedia(ctx context.Context, originalPaths, convert
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return false, err
 	}

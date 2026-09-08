@@ -11,12 +11,19 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 const (
 	osBaseURL   = "https://api.opensubtitles.com/api/v1"
 	osUserAgent = "VastivaMediaConverter v1.0"
 )
+
+// httpClient is shared by every request this file makes. http.DefaultClient
+// has no Timeout, so an OpenSubtitles outage (or a download link that never
+// responds) would hang the job path indefinitely (#49). These are small
+// JSON API calls and one small subtitle file, so 30s is ample.
+var httpClient = &http.Client{Timeout: 30 * time.Second}
 
 // Downloader fetches subtitles from the OpenSubtitles REST API v1.
 type Downloader struct {
@@ -111,7 +118,7 @@ func (d *Downloader) login(ctx context.Context) (string, error) {
 	}
 	d.applyHeaders(req, "")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -146,7 +153,7 @@ func (d *Downloader) search(ctx context.Context, token, title, year string) (int
 	}
 	d.applyHeaders(req, token)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return 0, err
 	}
@@ -197,7 +204,7 @@ func (d *Downloader) requestDownload(ctx context.Context, token string, fileID i
 	}
 	d.applyHeaders(req, token)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -228,7 +235,7 @@ func (d *Downloader) fetchContent(ctx context.Context, dlURL string) (string, er
 	}
 	req.Header.Set("User-Agent", osUserAgent)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}

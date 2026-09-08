@@ -75,7 +75,7 @@ func (p *OpenAIProvider) VerifyMedia(ctx context.Context, originalPaths, convert
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", p.APIKey))
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return false, err
 	}

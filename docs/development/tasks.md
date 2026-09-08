@@ -4,8 +4,8 @@
 
 ## 📋 Executive Summary
 
-Five open issues, from a full source review on 2026-09-04 combined with findings
-from production testing on 2026-09-03. #35, #36–#48, and #54 closed within days
+Four open issues, from a full source review on 2026-09-04 combined with findings
+from production testing on 2026-09-03. #35, #36–#49, and #54 closed within days
 of being filed — every Critical and High item found by review, and everything
 found in production testing, including one (#54) found only by actually
 deploying and using the fixes.
@@ -16,18 +16,18 @@ unconfirmed — see #37's entry for where that attempt got interrupted.
 The media pipeline itself — `internal/media` (ffmpeg, progress, validate) and
 `internal/ai/meta` — is in good shape and holds up under review. All four
 concurrency issues (#43–#45), #46's silent progress stall, #47's leaked
-extract directory and reintegration overwrite, and #48's permanently-excluded
-failed-job files are now fixed and covered by regression tests that reproduce
-the original bugs (extractDir's own #47 fix is the one exception — verified
+extract directory and reintegration overwrite, #48's permanently-excluded
+failed-job files, and #49's unbounded HTTP calls are now fixed and covered by
+regression tests that reproduce the original bugs (extractDir's own #47 fix
+and #49's `AnalyzeEncoding` deadline are the two exceptions — both verified
 by review and full-suite regression rather than a dedicated test, since
-exercising it needs `makemkvcon`). The remaining open work is all Medium/Low
-severity:
+exercising either needs infrastructure — `makemkvcon`, a full job pipeline —
+disproportionate to the size of the fix). Down to one Medium item and three Low:
 
-- **No HTTP client in the AI/subtitle path has a timeout.** Twelve
-  `http.DefaultClient.Do` sites across `internal/ai` and
-  `internal/subtitles/opensubtitles.go` have none, and `AnalyzeEncoding`
-  runs on a context with no deadline of its own — an unresponsive Ollama
-  hangs a worker indefinitely (#49).
+- **Session tokens have no randomness, server-side revocation, or real
+  rate limiting.** A token is `sha256(adminPassword + date)`, valid up to
+  48h and compared non-constant-time; behind Traefik the login limiter sees
+  one IP for every client, so it protects nobody (#50).
 
 The previous revision of this file claimed all known bugs were resolved. That was
 written 2026-02-27 and was not re-verified against the code before this review.
@@ -35,6 +35,56 @@ written 2026-02-27 and was not re-verified against the code before this review.
 ---
 
 ## ✅ Closed Today
+
+### 49. No HTTP Client Timeouts
+
+- **Status:** ✅ Resolved (2026-09-08)
+- **File:** `internal/ai/provider.go`; `internal/ai/openai.go`;
+  `internal/ai/openai_verify.go`; `internal/ai/claude.go`;
+  `internal/ai/claude_verify.go`; `internal/ai/gemini.go`;
+  `internal/ai/ollama.go`; `internal/ai/ollama_verify.go`;
+  `internal/ai/timeout_test.go` (new); `internal/subtitles/opensubtitles.go`;
+  `internal/subtitles/opensubtitles_test.go` (new); `internal/jobs/manager.go`
+- **Details:** Thirteen `http.DefaultClient.Do` sites (`internal/ai`'s six
+  providers/verifiers plus `internal/subtitles/opensubtitles.go`'s four),
+  none with a timeout — `http.DefaultClient` has none by default. Every one
+  of those requests is already built with `NewRequestWithContext(ctx, ...)`,
+  but on the job path `ctx` is `job.ctx`, a plain `context.WithCancel` with
+  no deadline of its own. An unresponsive endpoint — most concretely a
+  hung local Ollama instance — blocked its caller forever, and since the
+  job path calls these synchronously from a worker goroutine, that meant a
+  permanently stuck worker, not just a stuck request.
+- **Fix:**
+  - Added a package-level `httpClient` (`internal/ai/provider.go`, 120s
+    timeout) and replaced every `http.DefaultClient.Do` in the six
+    provider/verifier files with it — one client shared by every AI call in
+    the package, since `Timeout` bounds the whole round trip regardless of
+    what context the caller passes.
+  - Added the equivalent in `internal/subtitles/opensubtitles.go` (30s — a
+    much shorter bound for small JSON API calls and one small subtitle
+    file), replacing its four call sites the same way.
+  - `AnalyzeEncoding`'s call site in `manager.go` — the ticket's named
+    example of "the job path" — now wraps `job.ctx` in its own
+    `context.WithTimeout(job.ctx, 30*time.Second)` rather than relying on
+    the shared client's more generous general-purpose bound: the CRF
+    suggestion is explicitly optional (the existing fallback is the
+    configured CRF, already a good answer), so it shouldn't hold up a job
+    for the full 120s just to fail gracefully anyway.
+- **Tests:** `TestHTTPClientEnforcesTimeout` in both `internal/ai` (via
+  `OpenAIProvider.Analyze` against an `httptest.Server` that never responds)
+  and `internal/subtitles` (via `fetchContent`, the one call that takes its
+  URL directly rather than through the fixed `osBaseURL` constant) shrink
+  the shared client's `Timeout` to 100ms for the test and confirm the call
+  returns an error well within a 5s outer bound rather than hanging.
+  Confirmed both fail against a reverted single call site (temporarily
+  restoring `http.DefaultClient.Do` in `openai.go` and in
+  `opensubtitles.go`'s `fetchContent`) with "the client timeout was not
+  enforced", and pass with the fix. `AnalyzeEncoding`'s explicit deadline
+  has no dedicated test — exercising it needs a full job pipeline with a
+  real AI provider and a slow endpoint, disproportionate to a two-line
+  `context.WithTimeout` wrap — and is covered by review and full-suite
+  regression instead. `gofmt -l .`, `go vet ./...`, `go build ./...`, and
+  `go test -race -count=1 ./...` all clean.
 
 ### 48. Files Are Marked Processed at Job Creation
 
@@ -717,16 +767,6 @@ written 2026-02-27 and was not re-verified against the code before this review.
 
 ## 🟡 Medium
 
-### 49. No HTTP Client Timeouts
-
-- **Status:** 🟡 Open
-- **File:** `internal/ai/*.go`; `internal/subtitles/opensubtitles.go`
-- **Details:** Twelve `http.DefaultClient.Do` sites, none with a timeout.
-  `AnalyzeEncoding` runs on `job.ctx`, which carries no deadline, so an
-  unresponsive Ollama hangs a worker indefinitely.
-- **Fix:** Per-provider client with a sane timeout; explicit deadline on AI calls
-  made from the job path.
-
 ### 50. Session Tokens and Rate Limiting
 
 - **Status:** 🟡 Open
@@ -859,9 +899,9 @@ that gate never reached.
 |----------|------|----------|
 | 🔴 Critical | 0 | 7 |
 | 🟠 High | 0 | 15 |
-| 🟡 Medium | 2 | 11 |
+| 🟡 Medium | 1 | 12 |
 | 🟢 Low | 3 | 17 |
-| **Total** | **5** | **50** |
+| **Total** | **4** | **51** |
 
 ---
 
@@ -869,10 +909,10 @@ that gate never reached.
 
 1. ~~**#35**~~, ~~**#36**~~, ~~**#37**~~, ~~**#38**~~, ~~**#39**~~, ~~**#40**~~,
    ~~**#41**~~, ~~**#42**~~, ~~**#43**~~, ~~**#44**~~, ~~**#45**~~, ~~**#46**~~,
-   ~~**#47**~~, ~~**#48**~~, ~~**#54**~~ — done. #37's entrypoint is now
-   deploy-verified; VAAPI itself still isn't confirmed — see its entry above.
-2. **#49**.
-3. **#50**, then **#51** (which can now build on #43's `Snapshot()`), **#52**, **#53**.
+   ~~**#47**~~, ~~**#48**~~, ~~**#49**~~, ~~**#54**~~ — done. #37's entrypoint
+   is now deploy-verified; VAAPI itself still isn't confirmed — see its entry
+   above.
+2. **#50**, then **#51** (which can now build on #43's `Snapshot()`), **#52**, **#53**.
 
 ---
 
