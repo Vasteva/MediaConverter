@@ -271,7 +271,7 @@ func Load() *Config {
 	}
 
 	cfg.IsPremium = license.Validate(cfg.LicenseKey)
-	cfg.IsInitialized = checkInitialized(cfg.ScannerProcessedFile)
+	cfg.IsInitialized = checkInitialized(cfg.ScannerProcessedFile, cfg.AdminPassword)
 
 	return cfg
 }
@@ -386,7 +386,20 @@ func (c *Config) Save() error {
 	return os.Rename(tmp, ConfigFile)
 }
 
-func checkInitialized(processedFile string) bool {
+// checkInitialized reports whether setup has already been completed.
+//
+// A non-empty adminPassword is treated as initialized on its own, not just
+// the marker file's presence: AuthMiddleware unlocks every setup route
+// (including POST /api/setup/complete, which sets AdminPassword) whenever
+// IsInitialized is false, so relying solely on a file surviving on disk
+// reopens that hole the moment it goes missing — a lost volume, a wiped
+// /data, a restore that didn't carry it over — while an admin password is
+// still configured. A password already set is by itself sufficient evidence
+// setup ran before (#50).
+func checkInitialized(processedFile, adminPassword string) bool {
+	if adminPassword != "" {
+		return true
+	}
 	dir := filepath.Dir(processedFile)
 	initFile := filepath.Join(dir, ".initialized")
 	_, err := os.Stat(initFile)

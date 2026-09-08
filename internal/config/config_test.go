@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -208,4 +209,41 @@ func TestSnapshotIsRaceFreeUnderConcurrentWrites(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	close(stop)
 	wg.Wait()
+}
+
+// TestCheckInitializedTreatsExistingPasswordAsInitialized covers #50:
+// AuthMiddleware unlocks every setup route — including POST
+// /api/setup/complete, which sets AdminPassword — whenever IsInitialized is
+// false. Relying solely on the .initialized marker file's presence reopened
+// that hole the moment the file went missing (a lost volume, a wiped
+// /data) while a password was still configured elsewhere, e.g. via the
+// ADMIN_PASSWORD env var. No .initialized file is created anywhere in this
+// test, simulating exactly that.
+func TestCheckInitializedTreatsExistingPasswordAsInitialized(t *testing.T) {
+	dir := t.TempDir()
+	withConfigFile(t, `{}`)
+	t.Setenv("SCANNER_PROCESSED_FILE", filepath.Join(dir, "processed.json"))
+	t.Setenv("ADMIN_PASSWORD", "already-configured")
+
+	cfg := Load()
+
+	if !cfg.IsInitialized {
+		t.Error("expected IsInitialized to be true when AdminPassword is already set, even without the .initialized marker file")
+	}
+}
+
+// TestCheckInitializedFalseWithNeitherPasswordNorMarker is the negative
+// case: a genuinely fresh install, with no password and no marker file, must
+// still route through the setup wizard as before.
+func TestCheckInitializedFalseWithNeitherPasswordNorMarker(t *testing.T) {
+	dir := t.TempDir()
+	withConfigFile(t, `{}`)
+	t.Setenv("SCANNER_PROCESSED_FILE", filepath.Join(dir, "processed.json"))
+	t.Setenv("ADMIN_PASSWORD", "")
+
+	cfg := Load()
+
+	if cfg.IsInitialized {
+		t.Error("expected IsInitialized to be false with no password configured and no .initialized marker file")
+	}
 }

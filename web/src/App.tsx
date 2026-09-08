@@ -37,6 +37,18 @@ function App() {
 
   // Helper functions - Define early to avoid hoisting issues
   const handleLogout = useCallback(() => {
+    // Best-effort server-side revocation (#50): the backend now tracks
+    // issued tokens, so a leaked one is no longer valid indefinitely until
+    // it happens to expire on its own — logging out actually invalidates it
+    // immediately. Fire-and-forget: the token is forgotten client-side
+    // either way, and if this request fails it just expires naturally
+    // later, same as before this existed.
+    if (token) {
+      fetch('/api/logout', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+      }).catch(() => {});
+    }
     setToken(null);
     sessionStorage.removeItem('token');
     // Clear data
@@ -45,7 +57,7 @@ function App() {
     setScannerConfig(null);
     setStats(null);
     setDashboardStats(null);
-  }, []);
+  }, [token]);
 
   const handleLogin = useCallback((newToken: string) => {
     setToken(newToken);

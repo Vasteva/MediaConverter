@@ -4,30 +4,31 @@
 
 ## 📋 Executive Summary
 
-Four open issues, from a full source review on 2026-09-04 combined with findings
-from production testing on 2026-09-03. #35, #36–#49, and #54 closed within days
-of being filed — every Critical and High item found by review, and everything
-found in production testing, including one (#54) found only by actually
-deploying and using the fixes.
+Three open issues, all Low severity, from a full source review on 2026-09-04
+combined with findings from production testing on 2026-09-03. #35, #36–#50,
+and #54 closed within days of being filed — every Critical, High, and Medium
+item found by review, and everything found in production testing, including
+one (#54) found only by actually deploying and using the fixes.
 #37's Docker/entrypoint half is now deploy-verified on the homelab host: the
 process genuinely drops to PUID/PGID, not just in theory. VAAPI itself is still
 unconfirmed — see #37's entry for where that attempt got interrupted.
 
 The media pipeline itself — `internal/media` (ffmpeg, progress, validate) and
-`internal/ai/meta` — is in good shape and holds up under review. All four
-concurrency issues (#43–#45), #46's silent progress stall, #47's leaked
+`internal/ai/meta` — is in good shape and holds up under review. Every
+concurrency issue (#43–#45), #46's silent progress stall, #47's leaked
 extract directory and reintegration overwrite, #48's permanently-excluded
-failed-job files, and #49's unbounded HTTP calls are now fixed and covered by
-regression tests that reproduce the original bugs (extractDir's own #47 fix
-and #49's `AnalyzeEncoding` deadline are the two exceptions — both verified
-by review and full-suite regression rather than a dedicated test, since
-exercising either needs infrastructure — `makemkvcon`, a full job pipeline —
-disproportionate to the size of the fix). Down to one Medium item and three Low:
+failed-job files, #49's unbounded HTTP calls, and #50's password-derived
+session tokens are now fixed and covered by regression tests that reproduce
+the original bugs (extractDir's own #47 fix, #49's `AnalyzeEncoding`
+deadline, and #50's `ProxyHeader`/`TrustedProxies` wiring are the exceptions
+— each verified by review and full-suite regression rather than a dedicated
+test, since exercising any of them needs infrastructure disproportionate to
+the size of the fix). What's left is all Low severity:
 
-- **Session tokens have no randomness, server-side revocation, or real
-  rate limiting.** A token is `sha256(adminPassword + date)`, valid up to
-  48h and compared non-constant-time; behind Traefik the login limiter sees
-  one IP for every client, so it protects nobody (#50).
+- **Several `Config` fields are unreachable from the UI.** `MaxConcurrentJobs`,
+  `ReplaceInPlace`, `HoldingDir`, `PUID`/`PGID` are absent from both `GET` and
+  `POST /api/config` entirely, and `SourceDir`/`DestDir`/`GPUVendor` are
+  readable but not settable outside the setup wizard (#51).
 
 The previous revision of this file claimed all known bugs were resolved. That was
 written 2026-02-27 and was not re-verified against the code before this review.
@@ -35,6 +36,85 @@ written 2026-02-27 and was not re-verified against the code before this review.
 ---
 
 ## ✅ Closed Today
+
+### 50. Session Tokens and Rate Limiting
+
+- **Status:** ✅ Resolved (2026-09-08)
+- **File:** `internal/api/sessions.go` (new); `internal/api/auth.go`;
+  `internal/api/routes.go`; `internal/api/sse.go`; `internal/api/ratelimit.go`;
+  `internal/config/config.go`; `cmd/server/main.go`; `.env.example`;
+  `web/src/App.tsx`; plus new/updated tests in `internal/api` and
+  `internal/config`
+- **Details:** Four distinct problems bundled under one ticket.
+  - Tokens were `sha256(adminPassword + YYYY-MM-DD)`: deterministic (anyone
+    who knew the password could compute a valid token without ever logging
+    in), impossible to revoke individually (nothing recorded which tokens
+    had been issued), valid up to 48h, and — worst of all — a leaked token
+    was itself an offline brute-force oracle for the password, since
+    checking a candidate password against a stolen token never had to touch
+    the rate-limited login endpoint at all. The SSE token variant had the
+    identical defect on a 2-minute window.
+  - Fiber wasn't configured with `ProxyHeader`, so behind Traefik `c.IP()`
+    returned the proxy's own address for every request — the login limiter
+    saw one client no matter how many real ones there were.
+  - `RateLimiter`'s IP map never evicted, growing by one entry per
+    attacker-controlled IP forever on a public, unauthenticated endpoint.
+  - `checkInitialized` was a bare `.initialized`-file existence check. Since
+    `AuthMiddleware` unlocks every setup route (including `POST
+    /api/setup/complete`, which sets `AdminPassword`) whenever
+    `IsInitialized` is false, a missing marker file — a lost volume, a wiped
+    `/data`, a restore that didn't carry it over — reopened unauthenticated
+    admin-password-setting even with a password already configured.
+- **Fix:**
+  - Added `SessionStore` (`sessions.go`): random 256-bit tokens in a
+    server-side map with expiry, replacing every password-derived token.
+    Login sessions get `SessionTTL` (24h), SSE tokens get the much shorter
+    `SSETokenTTL` (2 minutes, since that one travels in a URL query string
+    rather than a header). `AuthMiddleware` and the SSE route now validate
+    against the store instead of recomputing a hash; a new `POST
+    /api/logout` (inside the authenticated group) calls `Revoke` — a
+    capability that could not have existed under the old scheme, since
+    nothing recorded which tokens were live. The store self-evicts expired
+    entries at most once per `evictionInterval`, mirroring the same fix
+    applied to `RateLimiter` below. The login handler's password comparison
+    also moved to `subtle.ConstantTimeCompare`, the same class of concern
+    the token redesign addresses for tokens themselves.
+  - `cmd/server/main.go`'s `fiber.New` now sets `ProxyHeader:
+    fiber.HeaderXForwardedFor`, gated behind a new `TRUSTED_PROXY_CIDRS` env
+    var (`EnableTrustedProxyCheck` + `TrustedProxies`, both empty/off by
+    default — an unconditional `ProxyHeader` would let the container's
+    directly-published port, see `docker-compose.yml`, spoof
+    `X-Forwarded-For` to bypass the limiter entirely). Documented in
+    `.env.example`; left unset, behavior is unchanged from before this fix.
+  - `RateLimiter` gained the same eviction pattern as `SessionStore`:
+    entries inactive longer than `staleAfter` (10 minutes — well past the
+    1-minute reset window) are swept at most once per
+    `rateLimiterEvictionInterval`.
+  - `checkInitialized` now takes `adminPassword` and returns `true`
+    immediately if it's non-empty, independent of the marker file's
+    presence — a password already configured is by itself sufficient
+    evidence setup ran before.
+  - `web/src/App.tsx`'s `handleLogout` now calls `POST /api/logout`
+    (fire-and-forget, best-effort) before forgetting the token locally —
+    without this the new revocation capability would exist server-side but
+    never actually be used by the one client that has it.
+- **Tests:** `internal/api`: `TestSessionStoreIssueAndValid`,
+  `TestSessionStoreIssueIsRandom`, `TestSessionStoreExpiry`,
+  `TestSessionStoreRevoke`, `TestSessionStoreEvictionBoundsMapGrowth`,
+  `TestRateLimiterBlocksAfterFiveAttempts`,
+  `TestRateLimiterEvictionBoundsMapGrowth`, `TestLogoutRevokesToken` (through
+  the real app: a request succeeds before logout and is rejected with the
+  same token after), `TestLoginIssuesFreshTokenEachTime`,
+  `TestInvalidTokenRejected`. `internal/config`:
+  `TestCheckInitializedTreatsExistingPasswordAsInitialized` (confirmed this
+  fails against the pre-fix code with the exact reopened-hole symptom) and
+  `TestCheckInitializedFalseWithNeitherPasswordNorMarker` (the negative
+  case). `ProxyHeader`/`TrustedProxies` has no dedicated test — meaningfully
+  simulating a request that arrives from a specific trusted-vs-untrusted
+  peer address isn't practical through Fiber's `app.Test()` harness — and is
+  covered by review and full-suite regression instead. `npm run
+  build`/`lint` clean on the frontend change. `gofmt -l .`, `go vet ./...`,
+  `go build ./...`, and `go test -race -count=1 ./...` all clean.
 
 ### 49. No HTTP Client Timeouts
 
@@ -765,23 +845,8 @@ written 2026-02-27 and was not re-verified against the code before this review.
 
 ---
 
-## 🟡 Medium
-
-### 50. Session Tokens and Rate Limiting
-
-- **Status:** 🟡 Open
-- **File:** `internal/api/auth.go`; `internal/api/ratelimit.go`; `cmd/server/main.go`; `internal/config/config.go`
-- **Details:** Tokens are `sha256(adminPassword + YYYY-MM-DD)`: no randomness, no
-  server-side session, no revocation, valid up to 48 h, compared
-  non-constant-time. A leaked token is an offline brute-force target for the
-  password itself. Separately, Fiber is not configured with `ProxyHeader`, so
-  behind Traefik `c.IP()` is the proxy for every request — the login limiter is
-  one global bucket that provides no brute-force protection and locks out
-  everyone at once. The limiter map also never evicts. Finally, `checkInitialized`
-  is a bare file-exists check, so a missing `/data/.initialized` makes
-  `POST /api/setup/complete` — which sets `AdminPassword` — unauthenticated again.
-- **Fix:** Random tokens in a server-side store with expiry; `ProxyHeader`
-  configured; limiter eviction; close the setup re-open hole.
+*#46 through #50 — every Medium item found in this review — closed
+2026-09-08.*
 
 ---
 
@@ -899,9 +964,9 @@ that gate never reached.
 |----------|------|----------|
 | 🔴 Critical | 0 | 7 |
 | 🟠 High | 0 | 15 |
-| 🟡 Medium | 1 | 12 |
+| 🟡 Medium | 0 | 13 |
 | 🟢 Low | 3 | 17 |
-| **Total** | **4** | **51** |
+| **Total** | **3** | **52** |
 
 ---
 
@@ -909,10 +974,10 @@ that gate never reached.
 
 1. ~~**#35**~~, ~~**#36**~~, ~~**#37**~~, ~~**#38**~~, ~~**#39**~~, ~~**#40**~~,
    ~~**#41**~~, ~~**#42**~~, ~~**#43**~~, ~~**#44**~~, ~~**#45**~~, ~~**#46**~~,
-   ~~**#47**~~, ~~**#48**~~, ~~**#49**~~, ~~**#54**~~ — done. #37's entrypoint
-   is now deploy-verified; VAAPI itself still isn't confirmed — see its entry
-   above.
-2. **#50**, then **#51** (which can now build on #43's `Snapshot()`), **#52**, **#53**.
+   ~~**#47**~~, ~~**#48**~~, ~~**#49**~~, ~~**#50**~~, ~~**#54**~~ — done.
+   #37's entrypoint is now deploy-verified; VAAPI itself still isn't
+   confirmed — see its entry above.
+2. **#51** (which can now build on #43's `Snapshot()`), **#52**, **#53**.
 
 ---
 

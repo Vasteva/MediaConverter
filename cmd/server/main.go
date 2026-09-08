@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/gofiber/fiber/v2"
@@ -86,8 +87,26 @@ func main() {
 	}
 
 	// Initialize Fiber app
+	//
+	// Without TrustedProxies, c.IP() behind a reverse proxy (Traefik, in the
+	// documented deployment) always returns the proxy's own address, since
+	// that's the actual TCP peer — every client collapses into one IP as far
+	// as the login rate limiter is concerned, so it protects nobody (#50).
+	// TRUSTED_PROXY_CIDRS opts into resolving the real client IP from
+	// X-Forwarded-For instead, but only when the proxy is trusted — Fiber
+	// falls back to the raw peer address for any connection that doesn't
+	// come from one of these addresses/ranges, which matters here because
+	// the container's port is also published directly (docker-compose.yml),
+	// so the header can't simply be trusted unconditionally: a direct
+	// connection could set X-Forwarded-For itself to spoof a fresh IP on
+	// every request and bypass the limiter entirely. Left unset (the
+	// default), behavior is unchanged from before this fix.
+	trustedProxies := splitAndTrim(os.Getenv("TRUSTED_PROXY_CIDRS"))
 	app := fiber.New(fiber.Config{
-		AppName: "Vastiva v1.0.0",
+		AppName:                 "Vastiva v1.0.0",
+		ProxyHeader:             fiber.HeaderXForwardedFor,
+		EnableTrustedProxyCheck: len(trustedProxies) > 0,
+		TrustedProxies:          trustedProxies,
 	})
 
 	// Middleware
@@ -149,4 +168,17 @@ func main() {
 	if err := app.Listen(":" + port); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
+}
+
+// splitAndTrim splits a comma-separated list and drops empty/whitespace
+// entries, so an unset or empty env var yields an empty (not nil-vs-empty
+// ambiguous) slice rather than a single blank string.
+func splitAndTrim(csv string) []string {
+	var out []string
+	for _, part := range strings.Split(csv, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }

@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -48,7 +49,40 @@ func newTestApp(t *testing.T) (*fiber.App, string, string) {
 
 	app := fiber.New()
 	RegisterRoutes(app, jm, fs, cfg)
-	return app, GenerateToken(cfg.AdminPassword), dir
+
+	// Tokens are random and held in a SessionStore private to RegisterRoutes
+	// (#50), so a valid one can only be obtained the way a real client
+	// would: by actually logging in through the app.
+	token, err := login(app, cfg.AdminPassword)
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	return app, token, dir
+}
+
+// login performs a real POST /api/login against app and returns the issued
+// token.
+func login(app *fiber.App, password string) (string, error) {
+	body, _ := json.Marshal(map[string]string{"password": password})
+	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var out struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	if out.Token == "" {
+		return "", fmt.Errorf("login response contained no token (status %d)", resp.StatusCode)
+	}
+	return out.Token, nil
 }
 
 // TestPostScannerConfigRejectsLowScanInterval covers #36: the API must

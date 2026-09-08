@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Vasteva/MediaConverter/internal/config"
 	"github.com/Vasteva/MediaConverter/internal/jobs"
 	"github.com/gofiber/fiber/v2"
 	"github.com/valyala/fasthttp"
@@ -64,11 +63,14 @@ func (b *SSEBroadcaster) Broadcast(job *jobs.Job) {
 }
 
 // RegisterSSERoute adds GET /api/events to the app.
-// Authentication uses ?token= because EventSource does not support custom headers.
-func RegisterSSERoute(app *fiber.App, broadcaster *SSEBroadcaster, jm *jobs.Manager, cfg *config.Config) {
+// Authentication uses ?token= because EventSource does not support custom
+// headers — the token itself comes from POST /api/events/token, issued from
+// the same SessionStore as a normal login (#50), just with a much shorter
+// SSETokenTTL given where this one travels.
+func RegisterSSERoute(app *fiber.App, broadcaster *SSEBroadcaster, jm *jobs.Manager, sessions *SessionStore) {
 	app.Get("/api/events", func(c *fiber.Ctx) error {
 		token := c.Query("token")
-		if !validateSSEToken(token, cfg.Snapshot().AdminPassword) {
+		if !sessions.Valid(token) {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
 		}
 

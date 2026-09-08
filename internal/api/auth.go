@@ -1,16 +1,14 @@
 package api
 
 import (
-	"crypto/sha256"
-	"fmt"
-	"time"
-
 	"github.com/Vasteva/MediaConverter/internal/config"
 	"github.com/gofiber/fiber/v2"
 )
 
-// AuthMiddleware creates a middleware that checks for a valid session token
-func AuthMiddleware(cfg *config.Config) fiber.Handler {
+// AuthMiddleware creates a middleware that checks for a valid session token.
+// See SessionStore for why tokens are opaque and validated against a
+// server-side store rather than derived from the admin password (#50).
+func AuthMiddleware(cfg *config.Config, sessions *SessionStore) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		// One snapshot for the whole request: cfg is shared, unsynchronized,
 		// with every HTTP handler that writes it and every job-worker
@@ -41,68 +39,14 @@ func AuthMiddleware(cfg *config.Config) fiber.Handler {
 			token = auth
 		}
 
-		// Validate token
-		// For simplicity without a database, we compare it against a hash of the admin password
-		// In a real production app, you'd use JWT or a proper session store.
-		if !validateToken(token, snap.AdminPassword) {
+		if !sessions.Valid(token) {
 			return c.Status(401).JSON(fiber.Map{"error": "Unauthorized: Invalid token"})
 		}
 
+		// Stashed for handlers that need to act on the caller's own token —
+		// currently just POST /api/logout, to revoke it.
+		c.Locals("authToken", token)
+
 		return c.Next()
 	}
-}
-
-// GenerateToken creates a simple token for the session
-func GenerateToken(password string) string {
-	// A simple token could be a hash of the password + today's date
-	// This makes it valid for the current day only.
-	salt := time.Now().Format("2006-01-02")
-	hash := sha256.Sum256([]byte(password + salt))
-	return fmt.Sprintf("%x", hash)
-}
-
-// GenerateSSEToken creates a short-lived token for SSE connections.
-// The token is valid for up to 2 minutes, limiting its exposure in server access logs.
-func GenerateSSEToken(password string) string {
-	minute := time.Now().Unix() / 60
-	hash := sha256.Sum256([]byte(fmt.Sprintf("sse:%s:%d", password, minute)))
-	return fmt.Sprintf("%x", hash)
-}
-
-// validateSSEToken accepts tokens generated within the current or previous minute.
-func validateSSEToken(token, password string) bool {
-	if password == "" {
-		return false
-	}
-	now := time.Now().Unix() / 60
-	for _, minute := range []int64{now, now - 1} {
-		hash := sha256.Sum256([]byte(fmt.Sprintf("sse:%s:%d", password, minute)))
-		if token == fmt.Sprintf("%x", hash) {
-			return true
-		}
-	}
-	return false
-}
-
-func validateToken(token, password string) bool {
-	if password == "" {
-		// If no password set, we might want to allow all or reject all.
-		// For security in a public repo, let's reject if password is empty but auth is requested.
-		return false
-	}
-
-	// Token is valid if it matches today's or yesterday's hash (to handle day crossovers)
-	salt1 := time.Now().Format("2006-01-02")
-	hash1 := sha256.Sum256([]byte(password + salt1))
-	if token == fmt.Sprintf("%x", hash1) {
-		return true
-	}
-
-	salt2 := time.Now().Add(-24 * time.Hour).Format("2006-01-02")
-	hash2 := sha256.Sum256([]byte(password + salt2))
-	if token == fmt.Sprintf("%x", hash2) {
-		return true
-	}
-
-	return false
 }

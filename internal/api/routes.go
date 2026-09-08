@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"fmt"
 	"log"
 	"math/big"
@@ -29,14 +30,18 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		jm.OnJobComplete = fs.CompleteProcessed
 	}
 
+	// One store for every issued token — login sessions and short-lived SSE
+	// tokens alike (#50). See SessionStore for why.
+	sessions := NewSessionStore()
+
 	// Wire SSE broadcaster so every job state change is pushed to connected clients.
 	broadcaster := NewSSEBroadcaster()
 	if jm != nil {
 		jm.OnJobUpdate = broadcaster.Broadcast
 	}
-	RegisterSSERoute(app, broadcaster, jm, cfg)
+	RegisterSSERoute(app, broadcaster, jm, sessions)
 
-	api := app.Group("/api", AuthMiddleware(cfg))
+	api := app.Group("/api", AuthMiddleware(cfg, sessions))
 	RegisterFSRoutes(api, cfg)
 
 	RegisterFileBrowserRoute(api, cfg)
@@ -211,17 +216,34 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 			return c.Status(500).JSON(fiber.Map{"error": "Admin password not configured"})
 		}
 
-		// Validate password
-		if req.Password != adminPassword {
+		// Constant-time: a plain != leaks how many leading bytes of a guess
+		// matched via response timing, the same class of concern the token
+		// scheme below is designed around (#50).
+		if subtle.ConstantTimeCompare([]byte(req.Password), []byte(adminPassword)) != 1 {
 			return c.Status(401).JSON(fiber.Map{"error": "Invalid password"})
 		}
 
-		// Generate and return token
-		token := GenerateToken(adminPassword)
+		token, err := sessions.Issue(SessionTTL)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to issue session token"})
+		}
 		return c.JSON(fiber.Map{
 			"success": true,
 			"token":   token,
 		})
+	})
+
+	// Logout revokes the caller's own token immediately — deliberately
+	// inside the authenticated group, both because revoking requires
+	// knowing which token to revoke and because an unauthenticated logout
+	// would just be a way to guess at valid tokens for free. The old
+	// password-derived scheme had no equivalent: a leaked token stayed
+	// valid until its date-based window happened to lapse (#50).
+	api.Post("/logout", func(c *fiber.Ctx) error {
+		if token, ok := c.Locals("authToken").(string); ok {
+			sessions.Revoke(token)
+		}
+		return c.JSON(fiber.Map{"success": true})
 	})
 
 	// Dashboard Stats
@@ -788,7 +810,11 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 	// SSE short-lived token exchange (bug #26 mitigation)
 	// Issues a 2-minute token so the long-lived session token never appears in server access logs.
 	api.Post("/events/token", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{"token": GenerateSSEToken(cfg.Snapshot().AdminPassword)})
+		token, err := sessions.Issue(SSETokenTTL)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to issue SSE token"})
+		}
+		return c.JSON(fiber.Map{"token": token})
 	})
 
 	// AI Search
