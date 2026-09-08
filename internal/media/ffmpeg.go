@@ -37,7 +37,6 @@ type TranscodeOptions struct {
 	Preset        QualityPreset
 	CRF           int
 	AudioCodec    string // "copy", "aac", "ac3"
-	Container     string // "mkv", "mp4"
 	TotalDuration float64
 	Upscale       bool   // Premium feature: AI Super Resolution
 	Resolution    string // "1080p", "4k"
@@ -88,21 +87,6 @@ func NewFFmpegWrapper() (*FFmpegWrapper, error) {
 	}
 	ffprobePath, _ := exec.LookPath("ffprobe")
 	return &FFmpegWrapper{ffmpegPath: path, ffprobePath: ffprobePath}, nil
-}
-
-// Transcode executes FFmpeg transcoding with the given options
-func (f *FFmpegWrapper) Transcode(ctx context.Context, opts TranscodeOptions) error {
-	args := f.buildFFmpegArgs(opts)
-
-	cmd := exec.CommandContext(ctx, f.ffmpegPath, args...)
-
-	// Capture output for debugging
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("ffmpeg failed: %w\nOutput: %s", err, string(output))
-	}
-
-	return nil
 }
 
 // ExtractFrame extracts a single frame at a specific timestamp
@@ -662,14 +646,6 @@ func (m *MediaInfo) IsHDR() bool {
 
 // IsDolbyVision reports whether the source carries Dolby Vision metadata.
 func (m *MediaInfo) IsDolbyVision() bool { return m.DVProfile > 0 }
-
-// HasHDR10BaseLayer reports whether a Dolby Vision stream is backwards
-// compatible. Profiles 7 and 8 carry an HDR10 base layer that survives a
-// re-encode; profile 5 does not, and transcoding it without tonemapping
-// produces badly shifted colour.
-func (m *MediaInfo) HasHDR10BaseLayer() bool {
-	return m.DVProfile == 7 || m.DVProfile == 8
-}
 
 // bitDepthFromPixFmt derives a bit depth from an FFmpeg pixel format name.
 // Returns 0 when the format is unrecognised.

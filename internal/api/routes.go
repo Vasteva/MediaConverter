@@ -2,11 +2,9 @@ package api
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/subtle"
 	"fmt"
 	"log"
-	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,8 +41,6 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 
 	api := app.Group("/api", AuthMiddleware(cfg, sessions))
 	RegisterFSRoutes(api, cfg)
-
-	RegisterFileBrowserRoute(api, cfg)
 
 	// Setup Wizard
 	setup := api.Group("/setup")
@@ -952,78 +948,5 @@ func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *
 		}
 
 		return c.JSON(results)
-	})
-}
-
-func generateID() string {
-	return time.Now().Format("20060102150405") + "-" + randomString(6)
-}
-
-func randomString(n int) string {
-	const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
-	b := make([]byte, n)
-	for i := range b {
-		idx, err := rand.Int(rand.Reader, big.NewInt(int64(len(letters))))
-		if err != nil {
-			// Fallback to less secure but functional method
-			b[i] = letters[i%len(letters)]
-			continue
-		}
-		b[i] = letters[idx.Int64()]
-	}
-	return string(b)
-}
-
-// File Browser endpoint for listing directories
-func RegisterFileBrowserRoute(api fiber.Router, cfg *config.Config) {
-	api.Get("/browse", func(c *fiber.Ctx) error {
-		// One snapshot for the whole request: cfg is shared, unsynchronized,
-		// with every HTTP handler that writes it and every job-worker
-		// goroutine that reads it (#43).
-		snap := cfg.Snapshot()
-		path := c.Query("path", snap.SourceDir)
-
-		// Security: Validate the path is within allowed directories
-		validPath, err := security.ValidatePath(path, snap.SourceDir)
-		if err != nil {
-			// Try dest dir as fallback
-			validPath, err = security.ValidatePath(path, snap.DestDir)
-			if err != nil {
-				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Access denied: path not in allowed directories"})
-			}
-		}
-
-		entries, err := os.ReadDir(validPath)
-		if err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
-		}
-
-		var dirs []fiber.Map
-		var files []fiber.Map
-
-		for _, entry := range entries {
-			info, _ := entry.Info()
-			item := fiber.Map{
-				"name": entry.Name(),
-				"path": filepath.Join(validPath, entry.Name()),
-			}
-			if entry.IsDir() {
-				dirs = append(dirs, item)
-			} else {
-				if info != nil {
-					item["size"] = info.Size()
-				}
-				ext := strings.ToLower(filepath.Ext(entry.Name()))
-				if ext == ".mkv" || ext == ".mp4" || ext == ".avi" || ext == ".mov" || ext == ".iso" || ext == ".m4v" || ext == ".wmv" || ext == ".ts" {
-					files = append(files, item)
-				}
-			}
-		}
-
-		return c.JSON(fiber.Map{
-			"currentPath": validPath,
-			"directories": dirs,
-			"files":       files,
-		})
 	})
 }

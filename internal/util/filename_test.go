@@ -94,8 +94,8 @@ func TestSanitizeFilenameEmptyResult(t *testing.T) {
 }
 
 func TestFileOwnershipDisabledByDefault(t *testing.T) {
-	if NoOwnership().Enabled() {
-		t.Error("NoOwnership must be disabled")
+	if (FileOwnership{UID: OwnershipDisabled, GID: OwnershipDisabled}).Enabled() {
+		t.Error("both ids disabled must report Enabled() == false")
 	}
 	// Zero is a real uid (root), so it cannot double as the sentinel.
 	if !(FileOwnership{UID: 0, GID: 0}).Enabled() {
@@ -109,13 +109,13 @@ func TestFileOwnershipDisabledByDefault(t *testing.T) {
 // Apply on a disabled ownership must be a no-op, including for paths that do
 // not exist — the non-replacing output path calls it unconditionally.
 func TestFileOwnershipApplyDisabledIsNoop(t *testing.T) {
-	if err := NoOwnership().Apply("/nonexistent/path/file.mkv"); err != nil {
+	if err := (FileOwnership{UID: OwnershipDisabled, GID: OwnershipDisabled}).Apply("/nonexistent/path/file.mkv"); err != nil {
 		t.Errorf("disabled Apply should do nothing, got %v", err)
 	}
 }
 
 func TestFileOwnershipString(t *testing.T) {
-	if got := NoOwnership().String(); got != "unchanged" {
+	if got := (FileOwnership{UID: OwnershipDisabled, GID: OwnershipDisabled}).String(); got != "unchanged" {
 		t.Errorf("String() = %q, want %q", got, "unchanged")
 	}
 	if got := (FileOwnership{UID: 1000, GID: 1000}).String(); got != "1000:1000" {

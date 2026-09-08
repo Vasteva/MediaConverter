@@ -25,11 +25,6 @@ type FileOwnership struct {
 	GID int
 }
 
-// NoOwnership leaves file ownership untouched.
-func NoOwnership() FileOwnership {
-	return FileOwnership{UID: OwnershipDisabled, GID: OwnershipDisabled}
-}
-
 // Enabled reports whether either id is set.
 func (o FileOwnership) Enabled() bool {
 	return o.UID != OwnershipDisabled || o.GID != OwnershipDisabled

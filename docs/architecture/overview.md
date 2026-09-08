@@ -231,8 +231,8 @@ AI Features (Premium):
 ├─ Adaptive Encoding  → internal/ai/meta/cleaner.go
 │  └─ AI suggests optimal CRF based on content analysis
 │
-├─ Whisper Subtitles  → internal/ai/whisper/generator.go
-│  └─ Generates SRT files from audio using OpenAI Whisper
+├─ Subtitle Downloads → internal/subtitles/opensubtitles.go
+│  └─ Fetches SRT files from the OpenSubtitles API by parsed title/year
 │
 └─ Natural Language Search → internal/ai/search/searcher.go
    └─ Find media with queries like "action movies in space"

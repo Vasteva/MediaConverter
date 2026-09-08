@@ -4,12 +4,10 @@
 
 ## 📋 Executive Summary
 
-Two open issues, both Low severity, from a full source review on 2026-09-04
-combined with findings from production testing on 2026-09-03. #35, #36–#51,
-and #54 closed within days of being filed — every Critical, High, and Medium
-item found by review, every Low item but two, and everything found in
-production testing, including one (#54) found only by actually deploying and
-using the fixes.
+Zero open issues. Every item from the full source review on 2026-09-04, plus
+everything found in production testing on 2026-09-03 (including #54, found
+only by actually deploying and using the fixes), is now resolved: #35 through
+#54, closed within days of being filed.
 #37's Docker/entrypoint half is now deploy-verified on the homelab host: the
 process genuinely drops to PUID/PGID, not just in theory. VAAPI itself is still
 unconfirmed — see #37's entry for where that attempt got interrupted.
@@ -19,20 +17,19 @@ The media pipeline itself — `internal/media` (ffmpeg, progress, validate) and
 concurrency issue (#43–#45), #46's silent progress stall, #47's leaked
 extract directory and reintegration overwrite, #48's permanently-excluded
 failed-job files, #49's unbounded HTTP calls, #50's password-derived session
-tokens, and #51's unreachable config fields are now fixed and covered by
+tokens, and #51's unreachable config fields are fixed and covered by
 regression tests that reproduce the original bugs (extractDir's own #47 fix,
 #49's `AnalyzeEncoding` deadline, and #50's `ProxyHeader`/`TrustedProxies`
 wiring are the exceptions — each verified by review and full-suite regression
 rather than a dedicated test, since exercising any of them needs
-infrastructure disproportionate to the size of the fix). What's left is
-housekeeping:
-
-- **The security audit doc and README describe code that no longer matches
-  reality.** `audit.md` calls the session token "HMAC-SHA256" (it was plain
-  SHA-256, and is now a random server-side token entirely — #50) and states
-  a login limit of "10 attempts per minute" (the code has always used 5).
-  Separately, `/api/browse` and several other symbols are dead code, unused
-  by anything but still present (#52, #53).
+infrastructure disproportionate to the size of the fix). The last two,
+housekeeping items, are closed too: #52 brought `docs/security/audit.md`,
+`README.md`, `.env.example`, `CLAUDE.md`, and `docs/architecture/overview.md`
+back in line with the code (the token/rate-limit claims, the Whisper-vs-
+OpenSubtitles subtitle description in two separate documents, a stale port
+default, a stale env var default, and an Intel QSV-vs-VAAPI nit), and #53
+removed seven confirmed-dead symbols, including the unused `/api/browse`
+endpoint.
   `ReplaceInPlace`, `HoldingDir`, `PUID`/`PGID` are absent from both `GET` and
   `POST /api/config` entirely, and `SourceDir`/`DestDir`/`GPUVendor` are
   readable but not settable outside the setup wizard (#51).
@@ -43,6 +40,78 @@ written 2026-02-27 and was not re-verified against the code before this review.
 ---
 
 ## ✅ Closed Today
+
+### 53. Dead Code
+
+- **Status:** ✅ Resolved (2026-09-08)
+- **File:** `internal/api/routes.go`; `internal/media/ffmpeg.go`;
+  `internal/scanner/config.go`; `internal/util/ownership.go`;
+  `internal/util/filename_test.go`; `README.md`
+- **Details:** Confirmed each symbol genuinely had zero call sites (beyond
+  its own definition and, for `NoOwnership`, its own test) before removing
+  anything: `/api/browse` (`RegisterFileBrowserRoute`) — a second directory
+  browser, unused by the UI, which calls `/api/fs/list` instead;
+  `FFmpegWrapper.Transcode` — superseded by `TranscodeWithProgress`, which
+  is what every caller actually uses; `SaveWatchDirectories`;
+  `generateID`/`randomString` in `routes.go` (job IDs actually come from
+  `util.GenerateID`, a different function in a different package);
+  `TranscodeOptions.Container`; `HasHDR10BaseLayer`; `NoOwnership`.
+- **Fix:** Deleted all of the above, including `RegisterFileBrowserRoute`'s
+  call site and its README documentation row, and the now-unused
+  `crypto/rand`/`math/big` imports in `routes.go` that only `randomString`
+  needed. `NoOwnership()` was a thin `FileOwnership{UID: -1, GID: -1}`
+  convenience constructor with no production callers — its three
+  `filename_test.go` call sites became the literal directly, preserving
+  those tests' actual coverage of `Enabled`/`Apply`/`String` (which remain
+  very much alive) rather than deleting them along with the dead
+  constructor they happened to use.
+- **Tests:** No new tests — this is subtraction, not new behavior. Existing
+  coverage for everything that stayed (`FileOwnership`'s other methods,
+  `buildFFmpegArgs`, etc.) continues to pass. `gofmt -l .`, `go vet ./...`,
+  `go build ./...`, `go test -race -count=1 ./...`, and `npm run
+  build`/`lint` all clean.
+
+### 52. Documentation Contradicts the Code
+
+- **Status:** ✅ Resolved (2026-09-08)
+- **File:** `docs/security/audit.md`; `README.md`; `.env.example`;
+  `CLAUDE.md`; `docs/architecture/overview.md`
+- **Details:** Verified each claim in `audit.md` against the current code
+  rather than trusting it on the strength of VAST-001 alone. Also found, in
+  the course of checking, that `docs/architecture/overview.md` carried the
+  exact same subtitle-implementation error as `README.md`, pointing at a
+  path (`internal/ai/whisper/generator.go`) that hasn't existed since the
+  refactor `CLAUDE.md` itself already documents.
+- **Fix:**
+  - `audit.md` VAST-005 no longer claims the token is "HMAC-SHA256" (it was
+    plain SHA-256, and is now — per #50 — a random server-side token with no
+    relation to the password at all) or that the login limit is "10 attempts
+    per minute" (the code has always used 5). Added a dated note describing
+    the #50 token redesign and the `TRUSTED_PROXY_CIDRS` caveat for the rate
+    limiter behind a reverse proxy, rather than silently rewriting the
+    original finding.
+  - `README.md`: "Whisper Subtitles" → "Subtitle Downloads" (both in the
+    features list and the roadmap), matching the real OpenSubtitles-based
+    implementation; the structure tree's `internal/ai/subtitles/` corrected
+    to the real top-level `internal/subtitles/`; `PORT` default `80` → `8080`;
+    removed the `/api/browse` row (#53) and added the previously-undocumented
+    `/api/logout` (#50); "Intel QSV" → "Intel/AMD VAAPI" in the features list,
+    matching the actual `getHWAccelInputArgs` routing.
+  - `docs/architecture/overview.md`'s AI-features diagram: replaced the
+    "Whisper Subtitles → internal/ai/whisper/generator.go" bullet with the
+    real subtitle-download path and description.
+  - `.env.example`: `SCANNER_CONFIG_FILE=/data/scanner-config.json` →
+    `/data/scanner_config.json` (underscore), matching `main.go`'s actual
+    default — the hyphenated version never matched anything the code looked
+    for, whether or not `docker-compose.yml` happens to pass the variable
+    through.
+  - `CLAUDE.md`: "Intel (QSV)" → "Intel/AMD (VAAPI — more reliable than QSV
+    in containers, per the comment in `getHWAccelInputArgs`)."
+- **Tests:** Documentation-only; no test coverage applies. Verified each
+  corrected claim by reading the referenced code directly (`getHWAccelInputArgs`'s
+  VAAPI routing, `main.go`'s `SCANNER_CONFIG_FILE`/`PORT` defaults,
+  `sessions.go`'s token design, `ratelimit.go`'s attempt cap) rather than
+  taking the old document's word for any of it.
 
 ### 51. Not All Configurable Options Are on the Settings Page
 
@@ -912,41 +981,8 @@ written 2026-02-27 and was not re-verified against the code before this review.
 
 ---
 
-## 🟢 Low
-
-### 52. Documentation Contradicts the Code
-
-- **Status:** 🟢 Open
-- **File:** `docs/security/audit.md`; `README.md`; `.env.example`
-- **Details:**
-  - `audit.md` VAST-001 claims path traversal is fixed for source and
-    destination — as of #37 (2026-09-04) that claim is now actually true,
-    but the document should still be checked against the rest of what it
-    asserts rather than trusted on the strength of one now-correct line.
-    VAST-005 describes the token as "HMAC-SHA256" (it is plain SHA-256) and
-    the login limit as "10 attempts per minute" (the code uses 5). An
-    overstating security document is worse than none.
-  - `README.md` advertises Whisper speech-to-text subtitles; the implementation
-    is an OpenSubtitles *download*. Its structure tree shows
-    `internal/ai/subtitles/`, which is `internal/subtitles/`. Its `PORT`
-    default (`80`) disagreed with `config.go`'s (`8080`) even before #37;
-    now the Docker image's default has moved to match `config.go`, so
-    README is further out of date, not closer.
-  - `.env.example` sets `SCANNER_CONFIG_FILE=/data/scanner-config.json`; `main.go`
-    defaults to `scanner_config.json`, and `docker-compose.yml` does not pass the
-    variable at all.
-  - `CLAUDE.md` is the most accurate of the three. One nit: it names QSV for
-    Intel, but `getHWAccelInputArgs` routes Intel to VAAPI, for reasons its own
-    code comment explains.
-
-### 53. Dead Code
-
-- **Status:** 🟢 Open
-- **Details:** `/api/browse` is a second directory browser, unused by the UI
-  (which calls `/api/fs/list`) and still documented in the README. Also unused:
-  `FFmpegWrapper.Transcode`, `SaveWatchDirectories`, `generateID`/`randomString`
-  in `routes.go` (whose crypto/rand fallback is deterministic),
-  `TranscodeOptions.Container`, `HasHDR10BaseLayer`, `NoOwnership`.
+*#52 and #53 — every Low item found in this review — closed 2026-09-08.
+Every issue from the 2026-09-04 review is now resolved.*
 
 ---
 
@@ -1006,19 +1042,18 @@ that gate never reached.
 | 🔴 Critical | 0 | 7 |
 | 🟠 High | 0 | 15 |
 | 🟡 Medium | 0 | 13 |
-| 🟢 Low | 2 | 18 |
-| **Total** | **2** | **53** |
+| 🟢 Low | 0 | 20 |
+| **Total** | **0** | **55** |
 
 ---
 
 ## Suggested Order
 
-1. ~~**#35**~~, ~~**#36**~~, ~~**#37**~~, ~~**#38**~~, ~~**#39**~~, ~~**#40**~~,
-   ~~**#41**~~, ~~**#42**~~, ~~**#43**~~, ~~**#44**~~, ~~**#45**~~, ~~**#46**~~,
-   ~~**#47**~~, ~~**#48**~~, ~~**#49**~~, ~~**#50**~~, ~~**#51**~~, ~~**#54**~~
-   — done. #37's entrypoint is now deploy-verified; VAAPI itself still isn't
-   confirmed — see its entry above.
-2. **#52**, **#53**.
+Every tracked issue from the 2026-09-04 review, plus #54 found in production
+testing, is closed as of 2026-09-08: ~~**#35**~~ through ~~**#54**~~. #37's
+entrypoint is now deploy-verified on the homelab host; VAAPI itself still
+isn't confirmed — see its entry above for where that attempt got
+interrupted. Nothing left to order.
 
 ---
 

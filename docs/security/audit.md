@@ -40,7 +40,8 @@
 
 ### VAST-005: Missing API Authentication
 - **Problem**: The REST API did not require authentication. Anyone on the network could create jobs or change settings.
-- **Remediation**: Implemented token-based authentication (`internal/api/auth.go`). All `/api/*` routes are protected by `AuthMiddleware`, which validates a HMAC-SHA256 token derived from the admin password. Login is rate-limited to 10 attempts per minute per IP. The `/api/setup/*` and SSE endpoints are exempt while setup is incomplete.
+- **Remediation**: Implemented token-based authentication (`internal/api/auth.go`). All `/api/*` routes are protected by `AuthMiddleware`, which validates a session token against a server-side `SessionStore` (`internal/api/sessions.go`). Login is rate-limited to 5 attempts per minute per IP. The `/api/setup/*` and SSE endpoints are exempt while setup is incomplete — "incomplete" now also requires `AdminPassword` to be unset, not just a missing `.initialized` marker file.
+- **Update (2026-09-08, #50)**: The token itself was originally `sha256(adminPassword + today's date)` — deterministic, derivable by anyone who knew the password without logging in, and a leaked token was itself an offline brute-force oracle for the password. It has been replaced with a random 256-bit token the server issues and tracks itself: sessions last 24h, the short-lived SSE token (passed in a URL query string, since `EventSource` cannot set an `Authorization` header) lasts 2 minutes, and `POST /api/logout` revokes a token immediately — a capability the old scheme had no way to offer, since nothing recorded which tokens were live. Separately, the rate limiter's per-IP tracking only works as described behind a reverse proxy if `TRUSTED_PROXY_CIDRS` is configured (see `.env.example`); without it, every client behind the proxy previously shared one bucket.
 
 ---
 

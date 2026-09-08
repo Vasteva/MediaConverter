@@ -124,13 +124,3 @@ func migrateResolutionFilter(cfg *config.Config, rawJSON []byte, watchDirsFile s
 		log.Printf("[Scanner] Warning: could not rewrite %s after migration: %v", watchDirsFile, err)
 	}
 }
-
-// SaveWatchDirectories saves watch directory configuration to JSON file
-func SaveWatchDirectories(filePath string, watchDirs []WatchDirectory) error {
-	data, err := json.MarshalIndent(watchDirs, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(filePath, data, 0644)
-}

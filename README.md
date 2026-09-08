@@ -6,7 +6,7 @@ A production-ready, AI-enhanced media transcoding platform with intelligent opti
 
 ### Core Capabilities
 - **Job Queue System**: Concurrent processing with goroutine worker pool
-- **Hardware Acceleration**: NVIDIA NVENC, Intel QSV, AMD VAAPI (Auto-detected)
+- **Hardware Acceleration**: NVIDIA NVENC, Intel/AMD VAAPI (Auto-detected)
 - **Multi-Format Support**: H.265/HEVC encoding with 10-bit color depth
 - **Real-time Monitoring**: Live progress tracking, FPS, and ETA calculation
 - **Automated Scanner**: Watch directories for new media with multiple scan modes
@@ -14,7 +14,7 @@ A production-ready, AI-enhanced media transcoding platform with intelligent opti
 ### 🤖 AI-Powered Features (Premium)
 - **Adaptive Encoding**: AI analyzes media to select optimal CRF values
 - **Smart Metadata**: Automatic filename cleaning and Title/Year extraction
-- **Whisper Subtitles**: AI-generated speech-to-text transcription (OpenAI)
+- **Subtitle Downloads**: Automatic subtitle fetching via the OpenSubtitles API
 - **AI Upscaling**: Enhance videos to 1080p or 4K with intelligent scaling
 - **Natural Language Search**: Find media using semantic queries
 - **AI-Enhanced Dashboard**: Storage savings analytics and efficiency scoring
@@ -96,13 +96,13 @@ vastiva/
 │   ├── api/             # REST API routes
 │   ├── ai/              # AI provider integrations
 │   │   ├── meta/        # Smart metadata cleaning
-│   │   ├── search/      # Natural language search
-│   │   ├── subtitles/       # Subtitle generation (Whisper)
+│   │   └── search/      # Natural language search
 │   ├── config/          # Configuration management
 │   ├── jobs/            # Job queue and workers
 │   ├── media/           # FFmpeg/MakeMKV wrappers
 │   ├── scanner/         # Automated file discovery
 │   ├── security/        # Path validation & masking
+│   ├── subtitles/       # Subtitle downloads (OpenSubtitles)
 │   └── system/          # System monitoring
 ├── web/                 # React frontend
 ├── Dockerfile           # Multi-stage build (CPU/Intel/AMD)
@@ -118,7 +118,7 @@ vastiva/
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PORT` | Server port | `80` |
+| `PORT` | Server port | `8080` |
 | `SOURCE_DIR` | Media source directory | `/storage` |
 | `DEST_DIR` | Output directory | `/output` |
 | `GPU_VENDOR` | GPU type (nvidia/intel/amd/cpu) | `cpu` |
@@ -157,6 +157,7 @@ AI_MODEL=claude-3-opus-20240229
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/login` | Authenticate and receive session token |
+| `POST` | `/api/logout` | Revoke the caller's session token |
 | `GET` | `/api/health` | Health check |
 | `GET` | `/api/stats` | System statistics |
 | `GET` | `/api/dashboard/stats` | AI insights and analytics |
@@ -165,7 +166,6 @@ AI_MODEL=claude-3-opus-20240229
 | `DELETE` | `/api/jobs/:id` | Cancel job |
 | `GET` | `/api/config` | Get system configuration |
 | `POST` | `/api/config` | Update configuration |
-| `GET` | `/api/browse` | Browse server filesystem |
 | `GET` | `/api/scanner/config` | Get scanner settings |
 | `POST` | `/api/scanner/config` | Update scanner settings |
 | `GET` | `/api/scanner/discover` | List discovered files pending queue |
@@ -255,7 +255,7 @@ All documentation is organized in the [`docs/`](docs/) folder:
 - [x] Web interface
 - [x] AI metadata cleaning
 - [x] AI adaptive encoding
-- [x] Whisper subtitles
+- [x] Subtitle downloads (OpenSubtitles)
 - [x] AI upscaling
 - [x] Natural language search
 - [x] AI-enhanced dashboard

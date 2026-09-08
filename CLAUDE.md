@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Project Is
 
-Vastiva Media Converter is an AI-powered media transcoding platform built with Go 1.22. A Go/Fiber backend serves a React frontend, managing a job queue that runs FFmpeg and MakeMKV via subprocess. Optional AI integrations (OpenAI, Claude, Gemini, Ollama) provide metadata cleaning, subtitle generation, media verification, and natural language search. Hardware GPU acceleration is supported for NVIDIA (NVENC), Intel (QSV), and AMD (VAAPI).
+Vastiva Media Converter is an AI-powered media transcoding platform built with Go 1.22. A Go/Fiber backend serves a React frontend, managing a job queue that runs FFmpeg and MakeMKV via subprocess. Optional AI integrations (OpenAI, Claude, Gemini, Ollama) provide metadata cleaning, subtitle generation, media verification, and natural language search. Hardware GPU acceleration is supported for NVIDIA (NVENC) and Intel/AMD (VAAPI — more reliable than QSV in containers, per the comment in `getHWAccelInputArgs`).
 
 ## Commands
 
