@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -158,6 +159,11 @@ type Manager struct {
 	OnJobUpdate   func(*Job)
 	jobsFilePath  string
 	loadErr       string // non-empty if jobs.json existed but could not be parsed
+
+	// saveMu guards lastProgressSave, the throttle updateJobProgress uses to
+	// cap how often a high-frequency progress tick triggers a full Save() (#45).
+	saveMu           sync.Mutex
+	lastProgressSave time.Time
 }
 
 // LoadError returns the error message from the initial jobs file load, if any.
@@ -524,6 +530,95 @@ func (m *Manager) updateJob(job *Job, fn func(*Job)) {
 	}
 }
 
+// progressSaveInterval caps how often a progress-only tick — Progress/FPS/ETA
+// during a transcode or extraction, which FFmpeg/MakeMKV emit several times a
+// second — triggers Save(). Save() marshals and rewrites every job in the
+// manager, not just this one, so without a throttle here that whole-file
+// rewrite fired at FFmpeg's stats rate rather than the job's own progress
+// (#45).
+//
+// A var, not a const: tests shrink it to keep TestUpdateJobProgressThrottlesSaves
+// fast rather than waiting out a real second.
+var progressSaveInterval = time.Second
+
+// updateJobProgress is updateJob for high-frequency progress ticks. It always
+// broadcasts via OnJobUpdate, so a progress bar watching SSE stays live, but
+// throttles the disk write to at most once per progressSaveInterval.
+//
+// Only use this for fields the next tick will overwrite anyway (Progress,
+// FPS, ETA). Anything that represents a real transition — a status change,
+// an error, a completion — must go through updateJob instead: a save skipped
+// here and never retried is a state that silently never reached disk.
+func (m *Manager) updateJobProgress(job *Job, fn func(*Job)) {
+	job.mu.Lock()
+	fn(job)
+	job.mu.Unlock()
+
+	m.saveMu.Lock()
+	due := time.Since(m.lastProgressSave) >= progressSaveInterval
+	if due {
+		m.lastProgressSave = time.Now()
+	}
+	m.saveMu.Unlock()
+	if due {
+		m.Save()
+	}
+
+	if m.OnJobUpdate != nil {
+		m.OnJobUpdate(job)
+	}
+}
+
+// maxRetainedTerminalJobs caps how many completed/failed jobs jobs.json
+// accumulates. Nothing else prunes history — a long-running install (the
+// scanner auto-creates one job per source file it finds) grows the file, and
+// Save()'s full-marshal cost with it, forever (#45).
+//
+// A var, not a const: TestPruneOldJobsCapsTerminalJobCount lowers it rather
+// than creating hundreds of jobs to reach the real cap.
+var maxRetainedTerminalJobs = 500
+
+// pruneOldJobs drops the oldest completed/failed jobs once more than
+// maxRetainedTerminalJobs are tracked, keeping the most recent by
+// CompletedAt. Pending and processing jobs are never touched. Called once a
+// job reaches a terminal state, so retention enforces itself without a
+// separate background sweep.
+func (m *Manager) pruneOldJobs() {
+	type terminalJob struct {
+		job         *Job
+		completedAt time.Time
+	}
+
+	m.mu.Lock()
+	var terminal []terminalJob
+	for _, job := range m.jobs {
+		job.mu.RLock()
+		status := job.Status
+		completedAt := job.CompletedAt
+		job.mu.RUnlock()
+		if status == StatusCompleted || status == StatusFailed {
+			terminal = append(terminal, terminalJob{job, completedAt})
+		}
+	}
+	if len(terminal) <= maxRetainedTerminalJobs {
+		m.mu.Unlock()
+		return
+	}
+
+	sort.Slice(terminal, func(i, j int) bool {
+		return terminal[i].completedAt.Before(terminal[j].completedAt)
+	})
+	for _, t := range terminal[:len(terminal)-maxRetainedTerminalJobs] {
+		delete(m.jobs, t.job.ID)
+	}
+	m.mu.Unlock()
+
+	// Save takes m.mu itself, so it must not be called while the write lock
+	// is held — see the same note on PurgeJobs. Without this, the pruned
+	// entries stay on disk until some other job happens to trigger a save.
+	m.Save()
+}
+
 func (m *Manager) appendAILog(job *Job, entry AILog) {
 	job.mu.Lock()
 	job.AILogs = append(job.AILogs, entry)
@@ -635,7 +730,7 @@ func (m *Manager) processJob(job *Job) {
 			})
 
 			err = m.makemkv.ExtractWithProgress(job.ctx, opts, func(p media.TranscodeProgress) {
-				m.updateJob(job, func(j *Job) {
+				m.updateJobProgress(job, func(j *Job) {
 					j.Progress = p.Percentage / 2 // First 50%
 				})
 			})
@@ -785,6 +880,7 @@ func (m *Manager) processJob(job *Job) {
 
 	// Persist job state to disk
 	m.Save()
+	m.pruneOldJobs()
 
 	if m.OnJobComplete != nil {
 		m.OnJobComplete(job)
@@ -959,7 +1055,7 @@ func (m *Manager) runExtraction(job *Job) error {
 		TitleIndex: mainTitleIdx,
 	}
 	err = m.makemkv.ExtractWithProgress(job.ctx, opts, func(p media.TranscodeProgress) {
-		m.updateJob(job, func(j *Job) {
+		m.updateJobProgress(job, func(j *Job) {
 			j.Progress = p.Percentage
 		})
 	})
@@ -1250,7 +1346,7 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 	})
 
 	err = m.ffmpeg.TranscodeWithProgress(job.ctx, opts, func(p media.TranscodeProgress) {
-		m.updateJob(job, func(j *Job) {
+		m.updateJobProgress(job, func(j *Job) {
 			j.Progress = p.Percentage
 			j.FPS = p.FPS
 			j.ETA = p.ETA
@@ -1622,7 +1718,7 @@ func (m *Manager) runTest(job *Job) error {
 			if elapsed >= duration {
 				return nil
 			}
-			m.updateJob(job, func(j *Job) {
+			m.updateJobProgress(job, func(j *Job) {
 				j.Progress = int((elapsed.Seconds() / duration.Seconds()) * 100)
 				j.FPS = 24.0
 				j.ETA = formatDuration(duration - elapsed)

@@ -3,6 +3,8 @@ package jobs
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -401,6 +403,119 @@ func TestRetryJobRejectsAlreadyQueuedJob(t *testing.T) {
 	if err := mgr.RetryJob(job.ID); err == nil {
 		t.Error("expected RetryJob to reject a job already sitting in the queue, to avoid pushing it a second time")
 	}
+}
+
+// TestUpdateJobProgressThrottlesSaves covers #45: a progress tick (FFmpeg's
+// -stats output, several times a second) used to call the same updateJob
+// that a real state transition does, so each tick rewrote jobs.json in full.
+// updateJobProgress is the throttled replacement — this drives it directly
+// rather than through a real transcode, and reads jobs.json back after each
+// call to prove whether a write actually happened.
+func TestUpdateJobProgressThrottlesSaves(t *testing.T) {
+	old := progressSaveInterval
+	progressSaveInterval = 50 * time.Millisecond
+	defer func() { progressSaveInterval = old }()
+
+	jobsPath := filepath.Join(t.TempDir(), "jobs.json")
+	mgr, err := NewManager(&config.Config{MaxConcurrentJobs: 1}, nil, jobsPath)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	job := &Job{ID: "progress-job", Type: JobTypeTest, Status: StatusProcessing}
+	mgr.AddJob(job) // saves once and starts the throttle window
+
+	readProgress := func() int {
+		t.Helper()
+		data, err := os.ReadFile(jobsPath)
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+		var jobList []struct {
+			ID       string `json:"id"`
+			Progress int    `json:"progress"`
+		}
+		if err := json.Unmarshal(data, &jobList); err != nil {
+			t.Fatalf("Unmarshal: %v", err)
+		}
+		for _, j := range jobList {
+			if j.ID == job.ID {
+				return j.Progress
+			}
+		}
+		t.Fatalf("job %s not found in %s", job.ID, jobsPath)
+		return -1
+	}
+
+	mgr.updateJobProgress(job, func(j *Job) { j.Progress = 10 })
+	if got := readProgress(); got != 10 {
+		t.Fatalf("first update: jobs.json shows progress %d, want 10", got)
+	}
+
+	// Immediately within the same throttle window: must not hit disk yet.
+	mgr.updateJobProgress(job, func(j *Job) { j.Progress = 20 })
+	if got := readProgress(); got != 10 {
+		t.Errorf("second update within the throttle window was not throttled: jobs.json shows %d, want it to still read 10", got)
+	}
+
+	// Past the window: the next tick must persist.
+	time.Sleep(progressSaveInterval * 3)
+	mgr.updateJobProgress(job, func(j *Job) { j.Progress = 30 })
+	if got := readProgress(); got != 30 {
+		t.Errorf("update after the throttle window elapsed: jobs.json shows %d, want 30", got)
+	}
+}
+
+// TestPruneOldJobsCapsTerminalJobCount covers #45's second half: nothing
+// pruned completed/failed jobs, so jobs.json — and the cost of marshaling it
+// on every save — grew without bound. This drops maxRetainedTerminalJobs to
+// a small number so the cap is reachable without creating hundreds of jobs.
+func TestPruneOldJobsCapsTerminalJobCount(t *testing.T) {
+	mgr, err := NewManager(&config.Config{MaxConcurrentJobs: 1}, nil, "")
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	const retain = 3
+	base := time.Now().Add(-time.Hour)
+	for i := 0; i < retain+2; i++ {
+		job := &Job{
+			ID:          idFor(i),
+			Type:        JobTypeTest,
+			Status:      StatusCompleted,
+			CompletedAt: base.Add(time.Duration(i) * time.Minute), // ascending: 0 is oldest
+		}
+		mgr.AddJob(job)
+	}
+	if got := len(mgr.GetAllJobs()); got != retain+2 {
+		t.Fatalf("set up %d jobs, want %d", got, retain+2)
+	}
+
+	withPruneCap(t, retain, func() {
+		mgr.pruneOldJobs()
+	})
+
+	remaining := mgr.GetAllJobs()
+	if len(remaining) != retain {
+		t.Fatalf("after pruning: %d jobs remain, want %d", len(remaining), retain)
+	}
+	for _, job := range remaining {
+		if job.ID == idFor(0) || job.ID == idFor(1) {
+			t.Errorf("oldest job %s survived pruning, want only the most recent %d kept", job.ID, retain)
+		}
+	}
+}
+
+func idFor(i int) string { return "terminal-" + string(rune('a'+i)) }
+
+// withPruneCap temporarily lowers maxRetainedTerminalJobs for fn, since the
+// real cap (500) would need hundreds of jobs to exercise in a unit test.
+func withPruneCap(t *testing.T, limit int, fn func()) {
+	t.Helper()
+	old := maxRetainedTerminalJobs
+	maxRetainedTerminalJobs = limit
+	defer func() { maxRetainedTerminalJobs = old }()
+	fn()
 }
 
 func TestCancelAllActive(t *testing.T) {

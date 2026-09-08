@@ -4,25 +4,26 @@
 
 ## 📋 Executive Summary
 
-Nine open issues, from a full source review on 2026-09-04 combined with findings
-from production testing on 2026-09-03. #35, #36–#44, and #54 closed within days
-of being filed — every Critical item, both concurrency issues found by review,
-and everything found in production testing, including one (#54) found only by
-actually deploying and using the fixes.
+Eight open issues, from a full source review on 2026-09-04 combined with findings
+from production testing on 2026-09-03. #35, #36–#45, and #54 closed within days
+of being filed — every Critical and High item found by review, and everything
+found in production testing, including one (#54) found only by actually
+deploying and using the fixes.
 #37's Docker/entrypoint half is now deploy-verified on the homelab host: the
 process genuinely drops to PUID/PGID, not just in theory. VAAPI itself is still
 unconfirmed — see #37's entry for where that attempt got interrupted.
 
 The media pipeline itself — `internal/media` (ffmpeg, progress, validate) and
-`internal/ai/meta` — is in good shape and holds up under review. #43's shared
-mutable state (`config.Config`, `Manager.ai`, `Scanner.config`/`stopCh`) and
-#44's double-processing risk (`PurgeJobs`, `RetryJob`) are both now fixed and
-covered by regression tests that reproduce the original bugs. The remaining
-open work is concentrated in the job queue's write volume:
+`internal/ai/meta` — is in good shape and holds up under review. All four
+concurrency issues (#43's shared mutable state, #44's double-processing risk,
+#45's unthrottled saves and unbounded job history) are now fixed and covered
+by regression tests that reproduce the original bugs. The remaining open work
+is all Medium/Low severity:
 
-- **Job state is rewritten several times a second.** Every progress callback
-  triggers a full `jobs.json` rewrite and an SSE broadcast, with nothing
-  pruning completed jobs (#45).
+- **FFmpeg progress parsing can silently stop mid-job.** `parseProgress` has
+  no line-length cap, never checks the scanner's error, and doesn't handle
+  `\r`-terminated output — the same defect already fixed once in
+  `makemkv.go` (#46).
 
 The previous revision of this file claimed all known bugs were resolved. That was
 written 2026-02-27 and was not re-verified against the code before this review.
@@ -30,6 +31,37 @@ written 2026-02-27 and was not re-verified against the code before this review.
 ---
 
 ## ✅ Closed Today
+
+### 45. Job State Is Rewritten Several Times a Second
+
+- **Status:** ✅ Resolved (2026-09-08)
+- **File:** `internal/jobs/manager.go`; `internal/jobs/jobs_test.go`
+- **Details:** `updateJob`'s `m.Save()` fired on every progress callback —
+  FFmpeg/MakeMKV's `-stats`-equivalent output several times a second — and
+  each call marshaled *every* tracked job and rewrote `jobs.json` whole.
+  Separately, nothing pruned completed or failed jobs, so the file (and the
+  cost of that rewrite) grew without bound on a long-running install, since
+  the scanner auto-creates one job per source file it finds.
+- **Fix:**
+  - Added `updateJobProgress`, used only at the four progress-tick call
+    sites (FFmpeg transcode, both MakeMKV extraction progress callbacks, and
+    `runTest`'s ticker). It still calls `OnJobUpdate` on every tick, so SSE
+    progress bars stay live, but throttles the `Save()` call to at most once
+    per `progressSaveInterval` (1s) via a manager-wide last-saved timestamp.
+    Every other `updateJob` call site — actual state transitions — is
+    unchanged and still saves immediately.
+  - Added `pruneOldJobs`, called once at the end of `processJob` after a job
+    reaches `StatusCompleted` or `StatusFailed`. It keeps at most
+    `maxRetainedTerminalJobs` (500) terminal jobs, dropping the oldest by
+    `CompletedAt` and re-saving; pending/processing jobs are never touched.
+- **Tests:** `TestUpdateJobProgressThrottlesSaves` drives `updateJobProgress`
+  directly and reads `jobs.json` back after each call to prove a tick within
+  the throttle window doesn't hit disk, while one after the window does
+  (`progressSaveInterval` is a `var` so the test shrinks it rather than
+  waiting out a real second). `TestPruneOldJobsCapsTerminalJobCount` seeds
+  more completed jobs than a (similarly shrunk) `maxRetainedTerminalJobs`
+  and confirms only the most recent survive. `gofmt -l .`, `go vet ./...`,
+  `go build ./...`, and `go test -race -count=1 ./...` all clean.
 
 ### 44. Purged and Retried Jobs Can Run Twice
 
@@ -563,18 +595,8 @@ written 2026-02-27 and was not re-verified against the code before this review.
 
 ---
 
-## 🟠 High — Concurrency
-
-### 45. Job State Is Rewritten Several Times a Second
-
-- **Status:** 🟠 Open
-- **File:** `internal/jobs/manager.go`
-- **Details:** `m.Save()` fires on every progress callback. Each call marshals
-  *every* job and rewrites `jobs.json` whole, with an SSE broadcast alongside.
-  Cost grows without bound because nothing prunes completed jobs.
-- **Fix:** Throttle progress-driven saves to roughly 1/s — state transitions can
-  still save immediately — and add a retention cap or age-out for completed and
-  failed jobs.
+*#43, #44, and #45 — every High/Concurrency item found in this review — closed
+2026-09-04 through 2026-09-08.*
 
 ---
 
@@ -756,22 +778,21 @@ that gate never reached.
 | Priority | Open | Resolved |
 |----------|------|----------|
 | 🔴 Critical | 0 | 7 |
-| 🟠 High | 1 | 14 |
+| 🟠 High | 0 | 15 |
 | 🟡 Medium | 5 | 8 |
 | 🟢 Low | 3 | 17 |
-| **Total** | **9** | **46** |
+| **Total** | **8** | **47** |
 
 ---
 
 ## Suggested Order
 
 1. ~~**#35**~~, ~~**#36**~~, ~~**#37**~~, ~~**#38**~~, ~~**#39**~~, ~~**#40**~~,
-   ~~**#41**~~, ~~**#42**~~, ~~**#43**~~, ~~**#44**~~, ~~**#54**~~ — done. #37's
-   entrypoint is now deploy-verified; VAAPI itself still isn't confirmed — see
-   its entry above.
-2. **#45**.
-3. **#46, #47, #48, #49**.
-4. **#50**, then **#51** (which can now build on #43's `Snapshot()`), **#52**, **#53**.
+   ~~**#41**~~, ~~**#42**~~, ~~**#43**~~, ~~**#44**~~, ~~**#45**~~, ~~**#54**~~ —
+   done. #37's entrypoint is now deploy-verified; VAAPI itself still isn't
+   confirmed — see its entry above.
+2. **#46, #47, #48, #49**.
+3. **#50**, then **#51** (which can now build on #43's `Snapshot()`), **#52**, **#53**.
 
 ---
 

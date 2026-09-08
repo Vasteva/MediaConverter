@@ -152,6 +152,11 @@ func TestScheduleRoundTripFromNull(t *testing.T) {
 // though a torn Schedule.AllowedDays read would indicate one too.
 func TestSnapshotIsRaceFreeUnderConcurrentWrites(t *testing.T) {
 	cfg := Load()
+	// AllowedDays is nil (len 0, "all days") until something sets it — a
+	// legitimate value, not a torn read. Seeding it here means the readers'
+	// "always length 1" invariant holds from goroutine start, rather than
+	// racing whichever writer happens to run its first WithLock call first.
+	cfg.Schedule.AllowedDays = []int{0}
 
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
