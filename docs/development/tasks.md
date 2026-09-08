@@ -4,8 +4,8 @@
 
 ## 📋 Executive Summary
 
-Six open issues, from a full source review on 2026-09-04 combined with findings
-from production testing on 2026-09-03. #35, #36–#47, and #54 closed within days
+Five open issues, from a full source review on 2026-09-04 combined with findings
+from production testing on 2026-09-03. #35, #36–#48, and #54 closed within days
 of being filed — every Critical and High item found by review, and everything
 found in production testing, including one (#54) found only by actually
 deploying and using the fixes.
@@ -15,17 +15,19 @@ unconfirmed — see #37's entry for where that attempt got interrupted.
 
 The media pipeline itself — `internal/media` (ffmpeg, progress, validate) and
 `internal/ai/meta` — is in good shape and holds up under review. All four
-concurrency issues (#43–#45), #46's silent progress stall, and #47's leaked
-extract directory and reintegration overwrite are now fixed and covered by
-regression tests that reproduce the original bugs (extractDir's own fix is
-the one exception — verified by review and full-suite regression rather than
-a dedicated test, since exercising it needs `makemkvcon`). The remaining open
-work is all Medium/Low severity:
+concurrency issues (#43–#45), #46's silent progress stall, #47's leaked
+extract directory and reintegration overwrite, and #48's permanently-excluded
+failed-job files are now fixed and covered by regression tests that reproduce
+the original bugs (extractDir's own #47 fix is the one exception — verified
+by review and full-suite regression rather than a dedicated test, since
+exercising it needs `makemkvcon`). The remaining open work is all Medium/Low
+severity:
 
-- **A transient failure permanently excludes a file from future scans.**
-  `createJobForFile`/`QueueFile` mark a file processed the moment a job is
-  merely created, not when it actually completes, so a job that fails
-  before finishing removes the file from the scanner's radar for good (#48).
+- **No HTTP client in the AI/subtitle path has a timeout.** Twelve
+  `http.DefaultClient.Do` sites across `internal/ai` and
+  `internal/subtitles/opensubtitles.go` have none, and `AnalyzeEncoding`
+  runs on a context with no deadline of its own — an unresponsive Ollama
+  hangs a worker indefinitely (#49).
 
 The previous revision of this file claimed all known bugs were resolved. That was
 written 2026-02-27 and was not re-verified against the code before this review.
@@ -33,6 +35,45 @@ written 2026-02-27 and was not re-verified against the code before this review.
 ---
 
 ## ✅ Closed Today
+
+### 48. Files Are Marked Processed at Job Creation
+
+- **Status:** ✅ Resolved (2026-09-08)
+- **File:** `internal/scanner/scanner.go`; `internal/scanner/scanner_test.go`
+- **Details:** `createJobForFile` and `QueueFile` both called `MarkProcessed`
+  — the durable, permanent entry — the moment a job was merely *created*,
+  before it had done anything. `shouldProcessFile` (the gate every scan
+  checks before creating a job) treats any tracked entry as "skip this
+  file", so a job that later failed left the source permanently excluded
+  from every future scan, with no way back short of manually editing
+  `processed.json`.
+- **Fix:** Added `ProcessedFile.InFlight` and two `ProcessedDB` methods:
+  `MarkInFlight` (writes a lightweight non-durable entry — no hash, no
+  `ProcessedAt` — when a job is created) and `ClearInFlight` (removes it,
+  but only if it's still marked in-flight, so it never clobbers a durable
+  entry that raced in). `createJobForFile` and `QueueFile` now call
+  `MarkInFlight` instead of `MarkProcessed`. `CompleteProcessed` — the
+  `jobs.Manager.OnJobComplete` hook, which fires on both success and
+  failure — now checks `job.GetStatus()` first: `StatusCompleted` writes
+  the durable entry exactly as before, anything else calls `ClearInFlight`
+  instead, making the file visible to scans again. The three other
+  `MarkProcessed` calls in `createJobForFile`/`Discover` (skip-high-res,
+  skip-already-efficient, skip-output-exists) are unchanged — those are
+  genuine "this file will never be touched" policy decisions made without
+  creating a job at all, not the bug this ticket describes.
+- **Tests:** `TestFailedJobDoesNotPermanentlyExcludeFileFromScans` drives
+  `createJobForFile` then `CompleteProcessed` with a failed job, and checks
+  `shouldProcessFile` directly (not `QueueFile`, which — being the manual
+  "process this file now" bypass — never checked `IsProcessed` to begin
+  with and would have passed regardless of whether the fix worked).
+  Confirmed this reproduces the original bug: a throwaway copy of the test
+  built against the pre-fix `scanner.go` (via `git stash`) failed with "a
+  failed job left the file permanently excluded from future scans", and
+  passes with the fix. `TestCompletedJobPromotesInFlightEntryToDurable`
+  covers the success path, confirming the entry ends up durable
+  (`InFlight: false`, `ProcessedAt` set) rather than still in-flight.
+  `gofmt -l .`, `go vet ./...`, `go build ./...`, and
+  `go test -race -count=1 ./...` all clean.
 
 ### 47. Extract Directory Leak and Reintegration Overwrite
 
@@ -676,18 +717,6 @@ written 2026-02-27 and was not re-verified against the code before this review.
 
 ## 🟡 Medium
 
-### 48. Files Are Marked Processed at Job Creation
-
-- **Status:** 🟡 Open
-- **File:** `internal/scanner/scanner.go`
-- **Details:** `createJobForFile` and `QueueFile` both call `MarkProcessed` the
-  moment a job is created, so one transient failure permanently excludes that
-  file from future scans. Only `CompleteProcessed` should write the durable
-  entry. Also in scope: `MarkProcessed` rewrites the whole DB and hashes 1 MB of
-  the file on every call.
-- **Fix:** In-flight marker at creation, cleared on failure; durable entry on
-  success only.
-
 ### 49. No HTTP Client Timeouts
 
 - **Status:** 🟡 Open
@@ -830,9 +859,9 @@ that gate never reached.
 |----------|------|----------|
 | 🔴 Critical | 0 | 7 |
 | 🟠 High | 0 | 15 |
-| 🟡 Medium | 3 | 10 |
+| 🟡 Medium | 2 | 11 |
 | 🟢 Low | 3 | 17 |
-| **Total** | **6** | **49** |
+| **Total** | **5** | **50** |
 
 ---
 
@@ -840,9 +869,9 @@ that gate never reached.
 
 1. ~~**#35**~~, ~~**#36**~~, ~~**#37**~~, ~~**#38**~~, ~~**#39**~~, ~~**#40**~~,
    ~~**#41**~~, ~~**#42**~~, ~~**#43**~~, ~~**#44**~~, ~~**#45**~~, ~~**#46**~~,
-   ~~**#47**~~, ~~**#54**~~ — done. #37's entrypoint is now deploy-verified;
-   VAAPI itself still isn't confirmed — see its entry above.
-2. **#48, #49**.
+   ~~**#47**~~, ~~**#48**~~, ~~**#54**~~ — done. #37's entrypoint is now
+   deploy-verified; VAAPI itself still isn't confirmed — see its entry above.
+2. **#49**.
 3. **#50**, then **#51** (which can now build on #43's `Snapshot()`), **#52**, **#53**.
 
 ---

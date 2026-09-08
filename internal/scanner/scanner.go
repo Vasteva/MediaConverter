@@ -164,6 +164,14 @@ type ProcessedFile struct {
 	AISubtitles bool      `json:"aiSubtitles"`
 	AIUpscale   bool      `json:"aiUpscale"`
 	AICleaned   bool      `json:"aiCleaned"`
+
+	// InFlight marks an entry written when a job was merely created for this
+	// path, not when it finished (#48). It exists only to stop a second scan
+	// from queuing the same file again while a job for it is still pending or
+	// processing; ClearInFlight removes it if that job fails, so a transient
+	// failure doesn't permanently hide the file from future scans the way a
+	// durable entry would.
+	InFlight bool `json:"inFlight,omitempty"`
 }
 
 // NewScanner creates a new file scanner
@@ -324,13 +332,25 @@ func (s *Scanner) GetStatus() ScanStatus {
 	return s.status
 }
 
-// CompleteProcessed updates a processed file entry with final stats from a job.
+// CompleteProcessed is the jobs.Manager.OnJobComplete hook, called when a
+// scanner-created job reaches ANY terminal state — success or failure alike.
 //
-// Both the source and the produced output are recorded. Marking only the source
-// is enough while output goes to a directory the scanner does not watch, but
-// replace-in-place puts the result inside the library — where the next scan
-// would treat it as a new source and re-encode it, repeatedly.
+// A failed job produced nothing worth recording, and must not leave the file
+// durably marked processed: createJobForFile's MarkInFlight call already
+// stands in for it while the job runs, precisely so a transient failure here
+// can clear that entry instead and let a future scan retry the file (#48).
+//
+// On success, both the source and the produced output are recorded. Marking
+// only the source is enough while output goes to a directory the scanner
+// does not watch, but replace-in-place puts the result inside the library —
+// where the next scan would treat it as a new source and re-encode it,
+// repeatedly.
 func (s *Scanner) CompleteProcessed(job *jobs.Job) {
+	if job.GetStatus() != jobs.StatusCompleted {
+		s.processedDB.ClearInFlight(job.SourcePath)
+		return
+	}
+
 	s.processedDB.MarkProcessed(ProcessedFile{
 		Path:        job.SourcePath,
 		JobID:       job.ID,
@@ -703,8 +723,10 @@ func (s *Scanner) createJobForFile(path string) error {
 
 	s.jobManager.AddJob(job)
 
-	// Mark as processed (initial entry)
-	s.processedDB.MarkProcessed(ProcessedFile{
+	// In-flight, not a durable entry (#48): a transient failure must not
+	// permanently exclude this file from future scans. CompleteProcessed
+	// promotes this to a durable entry on success, or clears it on failure.
+	s.processedDB.MarkInFlight(ProcessedFile{
 		Path:    path,
 		JobID:   job.ID,
 		JobType: string(jobType),
@@ -1096,7 +1118,8 @@ func (s *Scanner) QueueFile(path string) error {
 
 	s.jobManager.AddJob(job)
 
-	s.processedDB.MarkProcessed(ProcessedFile{
+	// In-flight, not durable — see the same note in createJobForFile (#48).
+	s.processedDB.MarkInFlight(ProcessedFile{
 		Path:    path,
 		JobID:   job.ID,
 		JobType: string(jobType),
@@ -1215,6 +1238,43 @@ func (db *ProcessedDB) MarkProcessed(f ProcessedFile) {
 	db.mu.Unlock()
 
 	db.Save()
+}
+
+// MarkInFlight records that a job now exists for f.Path, without the durable
+// hash/timestamp bookkeeping MarkProcessed does — a job that's merely been
+// created hasn't produced anything to hash yet, and completion (via
+// MarkProcessed, called from CompleteProcessed) will overwrite this entry
+// with the real one anyway. Existing only to make IsProcessed report true
+// while the job is in flight, so a second scan doesn't queue it again (#48).
+func (db *ProcessedDB) MarkInFlight(f ProcessedFile) {
+	f.InFlight = true
+	db.mu.Lock()
+	db.processed[f.Path] = f
+	db.mu.Unlock()
+	db.Save()
+}
+
+// ClearInFlight removes an in-flight entry for path, making the file visible
+// to future scans again. Called when a job fails, so a transient failure
+// doesn't permanently exclude the file the way a durable MarkProcessed entry
+// would (#48). A no-op if the entry is missing or has since been promoted to
+// a durable one — a job's completion callback runs exactly once, so which of
+// those two happens is determined by the job's own final status, not by a
+// race between them.
+func (db *ProcessedDB) ClearInFlight(path string) {
+	// Save takes db.mu itself (see the note on MarkProcessed), so it must not
+	// be called while the write lock from this method is still held.
+	db.mu.Lock()
+	f, exists := db.processed[path]
+	cleared := exists && f.InFlight
+	if cleared {
+		delete(db.processed, path)
+	}
+	db.mu.Unlock()
+
+	if cleared {
+		db.Save()
+	}
 }
 
 // calculateFileHash computes SHA256 hash of first 1MB of file

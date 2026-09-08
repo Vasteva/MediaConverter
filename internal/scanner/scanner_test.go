@@ -104,6 +104,120 @@ func TestQueueFileValidatesPath(t *testing.T) {
 	}
 }
 
+// TestFailedJobDoesNotPermanentlyExcludeFileFromScans covers #48:
+// createJobForFile used to write a durable ProcessedDB entry the moment a
+// job was created, before the job had done anything — so a job that later
+// failed left the file marked processed forever, and shouldProcessFile (the
+// gate every scan checks before creating a job) would skip it on every scan
+// after that, forever. MarkInFlight/ClearInFlight replace that with an entry
+// CompleteProcessed clears on failure instead of promoting.
+func TestFailedJobDoesNotPermanentlyExcludeFileFromScans(t *testing.T) {
+	dir := t.TempDir()
+	sourceDir := filepath.Join(dir, "source")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatalf("mkdir source: %v", err)
+	}
+	source := filepath.Join(sourceDir, "movie.mkv")
+	if err := os.WriteFile(source, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	cfg := &config.Config{SourceDir: sourceDir, DestDir: filepath.Join(dir, "dest")}
+	jm, err := jobs.NewManager(cfg, nil, filepath.Join(dir, "jobs.json"))
+	if err != nil {
+		t.Fatalf("jobs.NewManager: %v", err)
+	}
+
+	scannerCfg := &ScannerConfig{
+		Mode:               ScanModeManual,
+		AutoCreateJobs:     true,
+		OptimizeExtensions: []string{".mkv"},
+		ProcessedFilePath:  filepath.Join(dir, "processed.json"),
+	}
+	scannerCfg.Validate()
+	s, err := NewScanner(scannerCfg, jm, filepath.Join(dir, "scanner_config.json"))
+	if err != nil {
+		t.Fatalf("NewScanner: %v", err)
+	}
+	t.Cleanup(s.Stop)
+
+	watchDir := WatchDirectory{Path: sourceDir}
+
+	if !s.shouldProcessFile(source, watchDir) {
+		t.Fatal("test setup: file should be eligible before any job exists for it")
+	}
+	if err := s.createJobForFile(source); err != nil {
+		t.Fatalf("createJobForFile: %v", err)
+	}
+	if s.shouldProcessFile(source, watchDir) {
+		t.Fatal("expected the file to be ineligible while its job is in flight")
+	}
+
+	// The job fails.
+	s.CompleteProcessed(&jobs.Job{SourcePath: source, Status: jobs.StatusFailed})
+
+	if !s.shouldProcessFile(source, watchDir) {
+		t.Error("a failed job left the file ineligible for future scans — it will never be retried")
+	}
+}
+
+// TestCompletedJobPromotesInFlightEntryToDurable is the success-path
+// counterpart to TestFailedJobDoesNotPermanentlyExcludeFileFromScans: a job
+// that actually finishes must still leave the file durably marked processed,
+// not merely in-flight, so it isn't queued again on the next scan.
+func TestCompletedJobPromotesInFlightEntryToDurable(t *testing.T) {
+	dir := t.TempDir()
+	sourceDir := filepath.Join(dir, "source")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatalf("mkdir source: %v", err)
+	}
+	source := filepath.Join(sourceDir, "movie.mkv")
+	if err := os.WriteFile(source, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	cfg := &config.Config{SourceDir: sourceDir, DestDir: filepath.Join(dir, "dest")}
+	jm, err := jobs.NewManager(cfg, nil, filepath.Join(dir, "jobs.json"))
+	if err != nil {
+		t.Fatalf("jobs.NewManager: %v", err)
+	}
+
+	scannerCfg := &ScannerConfig{
+		Mode:               ScanModeManual,
+		OptimizeExtensions: []string{".mkv"},
+		ProcessedFilePath:  filepath.Join(dir, "processed.json"),
+	}
+	scannerCfg.Validate()
+	s, err := NewScanner(scannerCfg, jm, filepath.Join(dir, "scanner_config.json"))
+	if err != nil {
+		t.Fatalf("NewScanner: %v", err)
+	}
+	t.Cleanup(s.Stop)
+
+	if err := s.QueueFile(source); err != nil {
+		t.Fatalf("QueueFile: %v", err)
+	}
+
+	s.CompleteProcessed(&jobs.Job{SourcePath: source, Status: jobs.StatusCompleted})
+
+	var found *ProcessedFile
+	for _, f := range s.processedDB.GetAll() {
+		if f.Path == source {
+			f := f
+			found = &f
+		}
+	}
+	if found == nil {
+		t.Fatal("expected a durable entry for the source after successful completion")
+	}
+	if found.InFlight {
+		t.Error("entry is still marked in-flight after successful completion")
+	}
+	if found.ProcessedAt.IsZero() {
+		t.Error("expected ProcessedAt to be set on the durable entry")
+	}
+}
+
 func TestMatchesPatterns(t *testing.T) {
 	s := &Scanner{}
 	watchDir := WatchDirectory{
