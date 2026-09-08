@@ -324,6 +324,85 @@ func TestCancelledJobIsNotProcessed(t *testing.T) {
 	}
 }
 
+// TestPurgeJobsStopsQueuedPendingJobFromRunning covers #44's first half:
+// PurgeJobs deleted a job from m.jobs but never touched the priority heap, so
+// a still-queued pending job it purged was popped and run anyway — the exact
+// shape TestCancelledJobIsNotProcessed already guards for CancelJob, which
+// PurgeJobs never received.
+func TestPurgeJobsStopsQueuedPendingJobFromRunning(t *testing.T) {
+	mgr, err := NewManager(&config.Config{MaxConcurrentJobs: 1}, nil, "")
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	job := &Job{ID: "purge-me", Type: JobTypeTest, Status: StatusPending}
+	mgr.AddJob(job) // pushes it onto the heap
+
+	if purged := mgr.PurgeJobs(StatusPending); purged != 1 {
+		t.Fatalf("purged %d jobs, want 1", purged)
+	}
+	if mgr.GetJob(job.ID) != nil {
+		t.Fatal("expected the job to be removed from tracked jobs")
+	}
+
+	// The job is still sitting in the heap — PurgeJobs never touches it —
+	// so starting workers only now proves whether the guard actually stops it.
+	mgr.Start()
+	defer mgr.Stop()
+	time.Sleep(300 * time.Millisecond)
+
+	if got := job.GetStatus(); got != StatusCancelled {
+		t.Errorf("status = %s, want %s — a purged pending job ran instead of being skipped",
+			got, StatusCancelled)
+	}
+	job.mu.RLock()
+	started := job.StartedAt
+	job.mu.RUnlock()
+	if !started.IsZero() {
+		t.Error("StartedAt was set, so processJob ran on a purged job")
+	}
+}
+
+// TestJobMarkQueuedAndClearQueued covers the queued-flag primitive #44's fix
+// relies on: exactly one of two concurrent "push this job" decisions may
+// proceed, and popping it (clearQueued) makes it eligible again.
+func TestJobMarkQueuedAndClearQueued(t *testing.T) {
+	job := &Job{}
+	if job.markQueued() {
+		t.Error("first markQueued() reported already queued")
+	}
+	if !job.markQueued() {
+		t.Error("second markQueued() reported not already queued — would double-push")
+	}
+	job.clearQueued()
+	if job.markQueued() {
+		t.Error("markQueued() after clearQueued() reported already queued")
+	}
+}
+
+// TestRetryJobRejectsAlreadyQueuedJob covers #44's second half: RetryJob
+// pushed onto the heap with no check that the job was already there. The
+// real trigger is a manual retry landing while the auto-retry backoff path
+// (processJob's failure branch) has already reset a failed job to Pending
+// and is sleeping before its own re-push — from RetryJob's view that job is
+// indistinguishable from any other pending job unless something tracks
+// "already in the queue". AddJob pushing the job below stands in for that
+// pending-and-already-queued state without needing to reproduce the real
+// backoff timing.
+func TestRetryJobRejectsAlreadyQueuedJob(t *testing.T) {
+	mgr, err := NewManager(&config.Config{MaxConcurrentJobs: 1}, nil, "")
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	job := &Job{ID: "retry-me", Type: JobTypeTest, Status: StatusPending, MaxRetries: 1}
+	mgr.AddJob(job) // already pushes it onto the heap once
+
+	if err := mgr.RetryJob(job.ID); err == nil {
+		t.Error("expected RetryJob to reject a job already sitting in the queue, to avoid pushing it a second time")
+	}
+}
+
 func TestCancelAllActive(t *testing.T) {
 	mgr, err := NewManager(&config.Config{MaxConcurrentJobs: 1}, nil, "")
 	if err != nil {

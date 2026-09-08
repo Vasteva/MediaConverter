@@ -83,6 +83,16 @@ type Job struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	cmd    *exec.Cmd
+
+	// queued is true whenever this Job is currently sitting in m.pq, guarded
+	// by mu like every other field a worker and an API handler can touch at
+	// once. Without it, RetryJob and the auto-retry backoff path (#44) could
+	// each push the same *Job onto the heap independently — RetryJob sees
+	// Status already reset to Pending during the backoff sleep and has no way
+	// to tell the job is about to be re-pushed when the sleep ends — so it
+	// gets popped twice and run by two workers at once, both writing the same
+	// output file.
+	queued bool
 }
 
 // MarshalJSON serialises a Job while holding its read lock.
@@ -248,6 +258,7 @@ func (m *Manager) worker(id int) {
 		}
 		job := heap.Pop(&m.pq).(*Job)
 		m.pqMu.Unlock()
+		job.clearQueued()
 		m.processJob(job)
 	}
 }
@@ -260,22 +271,43 @@ func (m *Manager) AddJob(job *Job) {
 	if m.OnJobUpdate != nil {
 		m.OnJobUpdate(job)
 	}
+	job.markQueued()
 	m.pqMu.Lock()
 	heap.Push(&m.pq, job)
 	m.pqMu.Unlock()
 	m.pqCond.Signal()
 }
 
+// PurgeJobs removes every job with the given status from the tracked job set.
+//
+// A purged job that is still Pending may still be sitting in the priority
+// queue — deleting it from m.jobs alone does not stop a worker from popping
+// and running it (#44). It gets the same treatment CancelJob gives an active
+// job: cancel its context (a no-op for a job that never started) and mark it
+// Cancelled, so processJob's existing "cancelled before it started" guard
+// also catches this case, rather than running a job whose record just
+// vanished out from under it.
 func (m *Manager) PurgeJobs(status Status) int {
 	m.mu.Lock()
 	count := 0
+	var purged []*Job
 	for id, job := range m.jobs {
 		if job.GetStatus() == status {
 			delete(m.jobs, id)
+			purged = append(purged, job)
 			count++
 		}
 	}
 	m.mu.Unlock()
+
+	for _, job := range purged {
+		job.mu.Lock()
+		if job.cancel != nil {
+			job.cancel()
+		}
+		job.Status = StatusCancelled
+		job.mu.Unlock()
+	}
 
 	// Save takes m.mu itself, so it must not be called while the write lock is
 	// held. See the note on Save.
@@ -402,6 +434,26 @@ func (j *Job) GetStatus() Status {
 	return j.Status
 }
 
+// markQueued sets queued and reports whether it was already true. Every path
+// that pushes a Job onto the heap calls this first and skips the push if it
+// reports true — that's what stops RetryJob and the auto-retry backoff path
+// from both pushing the same job (#44).
+func (j *Job) markQueued() (alreadyQueued bool) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	alreadyQueued = j.queued
+	j.queued = true
+	return alreadyQueued
+}
+
+// clearQueued marks a job as no longer sitting in the heap. Called once a
+// worker pops it, so a later retry is free to push it again.
+func (j *Job) clearQueued() {
+	j.mu.Lock()
+	j.queued = false
+	j.mu.Unlock()
+}
+
 // RetryJob resets a job and adds it back to the priority queue
 func (m *Manager) RetryJob(id string) error {
 	m.mu.Lock()
@@ -417,6 +469,17 @@ func (m *Manager) RetryJob(id string) error {
 		m.mu.Unlock()
 		return fmt.Errorf("job is already processing")
 	}
+	// A job the auto-retry backoff path (processJob's failure branch) has
+	// already reset to Pending and is about to re-push once its sleep ends
+	// looks identical to any other pending job from here — the queued flag
+	// is what's left to tell them apart. Without this check, both this push
+	// and that one land, and two workers run the same job at once (#44).
+	if job.queued {
+		job.mu.Unlock()
+		m.mu.Unlock()
+		return fmt.Errorf("job is already queued")
+	}
+	job.queued = true
 
 	// Reset job state for retry
 	job.Status = StatusPending
@@ -679,10 +742,16 @@ func (m *Manager) processJob(job *Job) {
 				j.StatusDetail = fmt.Sprintf("Retrying in %s", backoff.Round(time.Second))
 			})
 			time.Sleep(backoff)
-			m.pqMu.Lock()
-			heap.Push(&m.pq, job)
-			m.pqMu.Unlock()
-			m.pqCond.Signal()
+			// A manual RetryJob call during the sleep above already reset
+			// this job to Pending and pushed it — markQueued reports that so
+			// this path can skip its own push rather than queuing the same
+			// *Job a second time (#44).
+			if !job.markQueued() {
+				m.pqMu.Lock()
+				heap.Push(&m.pq, job)
+				m.pqMu.Unlock()
+				m.pqCond.Signal()
+			}
 			return
 		}
 
@@ -1659,6 +1728,7 @@ func (m *Manager) RequeuePendingJobs() {
 
 	m.pqMu.Lock()
 	for _, job := range pending {
+		job.markQueued()
 		heap.Push(&m.pq, job)
 	}
 	m.pqMu.Unlock()

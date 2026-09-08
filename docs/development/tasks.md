@@ -1,28 +1,28 @@
 # Vastiva Media Converter — Task List
 
-**Generated:** 2026-02-01 | **Last Updated:** 2026-09-04
+**Generated:** 2026-02-01 | **Last Updated:** 2026-09-08
 
 ## 📋 Executive Summary
 
-Ten open issues, from a full source review on 2026-09-04 combined with findings
-from production testing on 2026-09-03. #35, #36–#43, and #54 closed the same day
-they were filed — every Critical item, the concurrency issue found by review, and
-everything found in production testing, including one (#54) found only by
-actually deploying and using today's fixes.
+Nine open issues, from a full source review on 2026-09-04 combined with findings
+from production testing on 2026-09-03. #35, #36–#44, and #54 closed within days
+of being filed — every Critical item, both concurrency issues found by review,
+and everything found in production testing, including one (#54) found only by
+actually deploying and using the fixes.
 #37's Docker/entrypoint half is now deploy-verified on the homelab host: the
 process genuinely drops to PUID/PGID, not just in theory. VAAPI itself is still
 unconfirmed — see #37's entry for where that attempt got interrupted.
 
 The media pipeline itself — `internal/media` (ffmpeg, progress, validate) and
 `internal/ai/meta` — is in good shape and holds up under review. #43's shared
-mutable state (`config.Config`, `Manager.ai`, `Scanner.config`/`stopCh`) is now
-synchronized and covered by a race test that reproduces the original bug — this
-was no longer theoretical by the time it was fixed: a #36 regression test had
-already tripped `s.config`'s race under `-race` on the first try. The remaining
-open work is concentrated in the job queue itself:
+mutable state (`config.Config`, `Manager.ai`, `Scanner.config`/`stopCh`) and
+#44's double-processing risk (`PurgeJobs`, `RetryJob`) are both now fixed and
+covered by regression tests that reproduce the original bugs. The remaining
+open work is concentrated in the job queue's write volume:
 
-- **Jobs can run twice.** `PurgeJobs` and `RetryJob` both push onto the queue
-  without checking whether the job is already there (#44).
+- **Job state is rewritten several times a second.** Every progress callback
+  triggers a full `jobs.json` rewrite and an SSE broadcast, with nothing
+  pruning completed jobs (#45).
 
 The previous revision of this file claimed all known bugs were resolved. That was
 written 2026-02-27 and was not re-verified against the code before this review.
@@ -30,6 +30,45 @@ written 2026-02-27 and was not re-verified against the code before this review.
 ---
 
 ## ✅ Closed Today
+
+### 44. Purged and Retried Jobs Can Run Twice
+
+- **Status:** ✅ Resolved (2026-09-08)
+- **File:** `internal/jobs/manager.go`; `internal/jobs/jobs_test.go`
+- **Details:** Two distinct ways the same job could end up running twice.
+  - `PurgeJobs` deleted a job from `m.jobs` but never touched `m.pq`. A
+    pending job purged while still sitting in the heap was popped and run by
+    a worker anyway — the same shape as the cancelled-job bug already
+    guarded at `processJob`'s "cancelled before it started" check, which
+    `PurgeJobs` never received.
+  - `RetryJob` pushed onto the heap with no check that the job was already
+    there. The real trigger: a job fails, the auto-retry backoff path resets
+    it to `StatusPending` and sleeps before its own re-push; a manual retry
+    landing during that sleep sees an ordinary pending job, resets it again,
+    and pushes it — so when the sleep ends, the backoff path pushes the same
+    `*Job` a second time. Two workers pop the same pointer and run two
+    FFmpeg processes against one output file.
+- **Fix:**
+  - Added an unexported `queued bool` on `Job` (guarded by its existing
+    `mu`), with `markQueued()` (sets it, reports whether it was already set)
+    and `clearQueued()` helpers. Every push site (`AddJob`, `RetryJob`, the
+    auto-retry backoff re-push, `RequeuePendingJobs`) now goes through
+    `markQueued()` and skips its push if the job was already queued; the
+    worker's `heap.Pop` clears it immediately so a later retry is free to
+    queue the job again.
+  - `RetryJob` now rejects a job that's already queued with the same
+    "already processing"-style error, instead of resetting and pushing it.
+  - `PurgeJobs` now gives a purged job the same treatment `CancelJob` gives
+    an active one: cancel its context (a no-op if it never started) and set
+    `Status = StatusCancelled`, so `processJob`'s existing guard skips it if
+    a worker ever pops it after the fact.
+- **Tests:** `TestPurgeJobsStopsQueuedPendingJobFromRunning` (purges a
+  pending, still-queued job, then starts workers and confirms it never
+  transitions out of `StatusCancelled`); `TestJobMarkQueuedAndClearQueued`
+  (unit-tests the queued-flag primitive directly); `TestRetryJobRejectsAlreadyQueuedJob`
+  (an already-queued pending job — standing in for the auto-retry-backoff
+  window — is rejected rather than pushed twice). `gofmt -l .`, `go vet
+  ./...`, `go build ./...`, and `go test -race -count=1 ./...` all clean.
 
 ### 43. Shared Mutable State Is Unsynchronised
 
@@ -526,18 +565,6 @@ written 2026-02-27 and was not re-verified against the code before this review.
 
 ## 🟠 High — Concurrency
 
-### 44. Purged and Retried Jobs Can Run Twice
-
-- **Status:** 🟠 Open
-- **File:** `internal/jobs/manager.go`
-- **Details:** `PurgeJobs` deletes from `m.jobs` but not from `m.pq`, so a purged
-  pending job is still popped and run — the same shape as the cancelled-job bug
-  already guarded at `processJob:468`, which purge never received. Separately,
-  `RetryJob` pushes onto the heap with no check that the job is already queued,
-  so retrying a job the auto-retry path has already re-pushed runs two FFmpeg
-  processes against one output file.
-- **Fix:** A queued/in-heap marker on `Job` covers both.
-
 ### 45. Job State Is Rewritten Several Times a Second
 
 - **Status:** 🟠 Open
@@ -729,19 +756,20 @@ that gate never reached.
 | Priority | Open | Resolved |
 |----------|------|----------|
 | 🔴 Critical | 0 | 7 |
-| 🟠 High | 2 | 13 |
+| 🟠 High | 1 | 14 |
 | 🟡 Medium | 5 | 8 |
 | 🟢 Low | 3 | 17 |
-| **Total** | **10** | **45** |
+| **Total** | **9** | **46** |
 
 ---
 
 ## Suggested Order
 
 1. ~~**#35**~~, ~~**#36**~~, ~~**#37**~~, ~~**#38**~~, ~~**#39**~~, ~~**#40**~~,
-   ~~**#41**~~, ~~**#42**~~, ~~**#43**~~, ~~**#54**~~ — done. #37's entrypoint is
-   now deploy-verified; VAAPI itself still isn't confirmed — see its entry above.
-2. **#44**, **#45**.
+   ~~**#41**~~, ~~**#42**~~, ~~**#43**~~, ~~**#44**~~, ~~**#54**~~ — done. #37's
+   entrypoint is now deploy-verified; VAAPI itself still isn't confirmed — see
+   its entry above.
+2. **#45**.
 3. **#46, #47, #48, #49**.
 4. **#50**, then **#51** (which can now build on #43's `Snapshot()`), **#52**, **#53**.
 
