@@ -4,8 +4,8 @@
 
 ## 📋 Executive Summary
 
-Seven open issues, from a full source review on 2026-09-04 combined with findings
-from production testing on 2026-09-03. #35, #36–#46, and #54 closed within days
+Six open issues, from a full source review on 2026-09-04 combined with findings
+from production testing on 2026-09-03. #35, #36–#47, and #54 closed within days
 of being filed — every Critical and High item found by review, and everything
 found in production testing, including one (#54) found only by actually
 deploying and using the fixes.
@@ -15,15 +15,17 @@ unconfirmed — see #37's entry for where that attempt got interrupted.
 
 The media pipeline itself — `internal/media` (ffmpeg, progress, validate) and
 `internal/ai/meta` — is in good shape and holds up under review. All four
-concurrency issues (#43's shared mutable state, #44's double-processing risk,
-#45's unthrottled saves and unbounded job history) and #46's silent progress
-stall are now fixed and covered by regression tests that reproduce the
-original bugs. The remaining open work is all Medium/Low severity:
+concurrency issues (#43–#45), #46's silent progress stall, and #47's leaked
+extract directory and reintegration overwrite are now fixed and covered by
+regression tests that reproduce the original bugs (extractDir's own fix is
+the one exception — verified by review and full-suite regression rather than
+a dedicated test, since exercising it needs `makemkvcon`). The remaining open
+work is all Medium/Low severity:
 
-- **A failed optimize after a successful extract strands a full-size MKV
-  forever.** `os.RemoveAll(extractDir)` only runs when the optimize step
-  succeeds, and separately, replacing a source can silently clobber an
-  existing file of the same output name (#47).
+- **A transient failure permanently excludes a file from future scans.**
+  `createJobForFile`/`QueueFile` mark a file processed the moment a job is
+  merely created, not when it actually completes, so a job that fails
+  before finishing removes the file from the scanner's radar for good (#48).
 
 The previous revision of this file claimed all known bugs were resolved. That was
 written 2026-02-27 and was not re-verified against the code before this review.
@@ -31,6 +33,47 @@ written 2026-02-27 and was not re-verified against the code before this review.
 ---
 
 ## ✅ Closed Today
+
+### 47. Extract Directory Leak and Reintegration Overwrite
+
+- **Status:** ✅ Resolved (2026-09-08)
+- **File:** `internal/jobs/manager.go`; `internal/jobs/reintegrate.go`;
+  `internal/jobs/reintegrate_test.go`
+- **Details:** Two unrelated file-handling holes.
+  - The ISO auto-extract path's `os.RemoveAll(extractDir)` ran only inside
+    `if err == nil` after the optimize step, so a failed optimize following
+    a successful extraction left a full-size intermediate MKV behind in a
+    hidden `.extract_<id>` directory permanently — and on a retry, the stale
+    file could still be sitting there for `filepath.Glob(extractDir,
+    "*.mkv")` to pick up alongside the freshly re-extracted one.
+  - `reintegrate` refused to overwrite an existing holding-path file but had
+    no equivalent guard on `paths.Final`. `os.Rename` replaces its
+    destination atomically with no warning, so replacing `movie.avi` (whose
+    transcode promotes to `movie.mkv`) silently destroyed an unrelated
+    `movie.mkv` that happened to already sit next to it in the library.
+- **Fix:**
+  - Changed the extract-dir cleanup to `defer os.RemoveAll(extractDir)`
+    right after it's created, so it runs on every exit from `processJob` —
+    success, failure, or an in-progress auto-retry — not just the success
+    path. Safe to call again on a subsequent retry: `MkdirAll` recreates the
+    directory, and `RemoveAll` on an already-gone path is a no-op.
+  - Added a `paths.Final != paths.Source` guard before `reintegrate` touches
+    anything: if something already exists at `Final` and it isn't the file
+    about to be moved to holding, refuse before the source is touched at
+    all. Skipped when `Final == Source` (the common same-container
+    replace-in-place case, e.g. `movie.mkv` → `movie.mkv`), where `Final`
+    legitimately "already exists" as the very file about to be relocated.
+- **Tests:** `TestReintegrateRefusesToOverwriteUnrelatedFinalFile` (an
+  avi→mkv replacement with an unrelated pre-existing `.mkv` at the output
+  path — confirmed this fails against the pre-fix code, silently clobbering
+  the unrelated file, and passes with the fix) and
+  `TestReintegrateAllowsSameContainerSelfReplacement` (the ordinary
+  mkv→mkv case must still succeed). The `extractDir` leak fix has no
+  dedicated test — exercising it needs a real or mocked `makemkvcon`, which
+  neither this sandbox nor the existing test suite has infrastructure for —
+  and is instead a small, self-evidently-correct `defer` change verified by
+  full-suite regression. `gofmt -l .`, `go vet ./...`, `go build ./...`, and
+  `go test -race -count=1 ./...` all clean.
 
 ### 46. Progress Parsing Repeats the MakeMKV Scanner Bug
 
@@ -633,18 +676,6 @@ written 2026-02-27 and was not re-verified against the code before this review.
 
 ## 🟡 Medium
 
-### 47. Extract Directory Leak and Reintegration Overwrite
-
-- **Status:** 🟡 Open
-- **File:** `internal/jobs/manager.go`; `internal/jobs/reintegrate.go`
-- **Details:** Two file-handling holes.
-  - `manager.go:598` runs `os.RemoveAll(extractDir)` only under `if err == nil`,
-    so a failed optimize after a successful extract strands a full-size MKV in a
-    hidden `.extract_<id>` directory permanently.
-  - `reintegrate` refuses to overwrite the holding path but not `paths.Final`, so
-    replacing `movie.avi` silently clobbers an existing `movie.mkv`.
-- **Fix:** `defer` the cleanup; add the same refusal for `Final`.
-
 ### 48. Files Are Marked Processed at Job Creation
 
 - **Status:** 🟡 Open
@@ -799,9 +830,9 @@ that gate never reached.
 |----------|------|----------|
 | 🔴 Critical | 0 | 7 |
 | 🟠 High | 0 | 15 |
-| 🟡 Medium | 4 | 9 |
+| 🟡 Medium | 3 | 10 |
 | 🟢 Low | 3 | 17 |
-| **Total** | **7** | **48** |
+| **Total** | **6** | **49** |
 
 ---
 
@@ -809,9 +840,9 @@ that gate never reached.
 
 1. ~~**#35**~~, ~~**#36**~~, ~~**#37**~~, ~~**#38**~~, ~~**#39**~~, ~~**#40**~~,
    ~~**#41**~~, ~~**#42**~~, ~~**#43**~~, ~~**#44**~~, ~~**#45**~~, ~~**#46**~~,
-   ~~**#54**~~ — done. #37's entrypoint is now deploy-verified; VAAPI itself
-   still isn't confirmed — see its entry above.
-2. **#47, #48, #49**.
+   ~~**#47**~~, ~~**#54**~~ — done. #37's entrypoint is now deploy-verified;
+   VAAPI itself still isn't confirmed — see its entry above.
+2. **#48, #49**.
 3. **#50**, then **#51** (which can now build on #43's `Snapshot()`), **#52**, **#53**.
 
 ---

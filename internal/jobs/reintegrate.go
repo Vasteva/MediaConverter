@@ -89,6 +89,18 @@ func (m *Manager) reintegrate(job *Job, paths replacementPaths) error {
 		return fmt.Errorf("holding path %s already exists — refusing to overwrite a retained original", holdingPath)
 	}
 
+	// A different container extension (movie.avi -> movie.mkv) means Final
+	// can collide with some unrelated file already sitting at that name —
+	// os.Rename below would replace it with no warning (#47). Skipped when
+	// Final and Source are the same path (the common same-container replace,
+	// e.g. movie.mkv -> movie.mkv): Source is about to be moved to holding,
+	// so by the time Final is written to, this path is naturally free.
+	if paths.Final != paths.Source {
+		if _, err := os.Stat(paths.Final); err == nil {
+			return fmt.Errorf("output path %s already exists — refusing to overwrite an unrelated file", paths.Final)
+		}
+	}
+
 	if err := os.Rename(paths.Source, holdingPath); err != nil {
 		return fmt.Errorf("moving original to holding: %w", err)
 	}

@@ -712,6 +712,13 @@ func (m *Manager) processJob(job *Job) {
 				err = fmt.Errorf("failed to create extract dir: %v", err)
 				break
 			}
+			// Deferred, not conditional on the optimize step below succeeding
+			// (#47): extraction has already produced a full-size intermediate
+			// MKV in this directory by the time we get there, and a failed
+			// optimize left it behind forever. Harmless to run again on a
+			// retry — MkdirAll above recreates the directory, and RemoveAll
+			// on a path that's already gone is a no-op.
+			defer os.RemoveAll(extractDir)
 
 			opts := media.ExtractOptions{
 				SourcePath: cleanPath,
@@ -767,9 +774,10 @@ func (m *Manager) processJob(job *Job) {
 			var optimizeVerified bool
 			optimizeVerified, err = m.runOptimizationFromPath(job, extractedSource)
 
-			// Cleanup
+			// extractDir cleanup is deferred above, unconditionally — this
+			// gates only the disc-image DeleteSource decision, which must
+			// never fire on a failed optimize.
 			if err == nil {
-				os.RemoveAll(extractDir)
 				// runOptimizationFromPath already used optimizeVerified to decide
 				// whether to delete its own sourcePath argument — the intermediate
 				// MKV (extractedSource), not the original disc image. The disc

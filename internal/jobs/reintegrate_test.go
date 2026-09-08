@@ -215,6 +215,72 @@ func TestReintegrateRefusesToOverwriteHeldOriginal(t *testing.T) {
 	}
 }
 
+// TestReintegrateRefusesToOverwriteUnrelatedFinalFile covers #47: promoting a
+// container-changing replacement (movie.avi -> movie.mkv) used no guard on
+// Final at all, so os.Rename's replace-on-collision semantics silently
+// destroyed an unrelated movie.mkv that happened to already sit in the
+// library next to the .avi being replaced.
+func TestReintegrateRefusesToOverwriteUnrelatedFinalFile(t *testing.T) {
+	dir := t.TempDir()
+	mgr := testManager(t, dir)
+
+	source := filepath.Join(dir, "library", "movies", "Old (1985)", "old.avi")
+	write(t, source, "avi original")
+	// Unrelated pre-existing file at the exact path old.avi's transcode would
+	// be promoted to.
+	unrelatedFinal := filepath.Join(dir, "library", "movies", "Old (1985)", "old.mkv")
+	write(t, unrelatedFinal, "unrelated pre-existing file")
+
+	paths := planReplacement(source, "job6")
+	write(t, paths.Temp, "transcoded")
+
+	if err := mgr.reintegrate(&Job{ID: "job6"}, paths); err == nil {
+		t.Fatal("expected refusal to overwrite an unrelated file at the output path")
+	}
+
+	if got, _ := os.ReadFile(unrelatedFinal); string(got) != "unrelated pre-existing file" {
+		t.Errorf("unrelated file at the output path was overwritten: %q", got)
+	}
+	// Nothing should have moved: refusing must happen before the source is
+	// touched, not after it's already been relocated to holding.
+	if got, _ := os.ReadFile(source); string(got) != "avi original" {
+		t.Errorf("source was modified: %q", got)
+	}
+	held := filepath.Join(dir, "held", "movies", "Old (1985)", "old.avi")
+	if _, statErr := os.Stat(held); !os.IsNotExist(statErr) {
+		t.Error("source should not have been moved to holding when the refusal fires")
+	}
+}
+
+// The common case — source and Final are the same path, e.g. movie.mkv
+// replacing itself in place — must still work: Final legitimately "already
+// exists" here (it's the very file about to move to holding), so the #47
+// guard above must not fire on it.
+func TestReintegrateAllowsSameContainerSelfReplacement(t *testing.T) {
+	dir := t.TempDir()
+	mgr := testManager(t, dir)
+
+	source := filepath.Join(dir, "library", "movies", "Same (2020)", "same.mkv")
+	write(t, source, "original")
+
+	paths := planReplacement(source, "job7")
+	if paths.Final != paths.Source {
+		t.Fatalf("test assumption broken: Final (%s) != Source (%s)", paths.Final, paths.Source)
+	}
+	write(t, paths.Temp, "transcoded")
+
+	if err := mgr.reintegrate(&Job{ID: "job7"}, paths); err != nil {
+		t.Fatalf("reintegrate: %v", err)
+	}
+	got, err := os.ReadFile(paths.Final)
+	if err != nil {
+		t.Fatalf("reading promoted file: %v", err)
+	}
+	if string(got) != "transcoded" {
+		t.Errorf("library file contains %q, want the transcode", got)
+	}
+}
+
 // cleanupTemp must only ever remove files it created.
 func TestCleanupTempRefusesRealFiles(t *testing.T) {
 	dir := t.TempDir()
