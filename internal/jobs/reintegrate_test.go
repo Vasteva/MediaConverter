@@ -281,6 +281,67 @@ func TestReintegrateAllowsSameContainerSelfReplacement(t *testing.T) {
 	}
 }
 
+// The scanner watches the library directory, so the rename that puts a
+// transcode into place fires a watch event. reintegrate must claim the
+// destination path (OnOutputClaimed) before that rename and before the file
+// exists, so the watcher doesn't queue a second optimise of the job's own
+// output. On success the claim is not released — the completion hook promotes
+// it to a durable entry.
+func TestReintegrateClaimsOutputBeforeItAppears(t *testing.T) {
+	dir := t.TempDir()
+	mgr := testManager(t, dir)
+
+	source := filepath.Join(dir, "library", "movies", "Pressure (2026)", "pressure.mp4")
+	write(t, source, "original")
+	paths := planReplacement(source, "job8")
+	write(t, paths.Temp, "transcoded")
+
+	var claimed, released []string
+	mgr.OnOutputClaimed = func(p string) {
+		if _, err := os.Stat(paths.Final); err == nil {
+			t.Errorf("output claimed after %s already existed on disk", paths.Final)
+		}
+		claimed = append(claimed, p)
+	}
+	mgr.OnOutputReleased = func(p string) { released = append(released, p) }
+
+	if err := mgr.reintegrate(&Job{ID: "job8"}, paths); err != nil {
+		t.Fatalf("reintegrate: %v", err)
+	}
+	if len(claimed) != 1 || claimed[0] != paths.Final {
+		t.Errorf("claimed = %v, want [%s]", claimed, paths.Final)
+	}
+	if len(released) != 0 {
+		t.Errorf("released = %v, want none on success", released)
+	}
+}
+
+// When the promotion fails, the claim must be released so a real file that
+// later lands at that path is still picked up.
+func TestReintegrateReleasesOutputWhenPromotionFails(t *testing.T) {
+	dir := t.TempDir()
+	mgr := testManager(t, dir)
+
+	source := filepath.Join(dir, "library", "movies", "Alpha (2018)", "alpha.mkv")
+	write(t, source, "original")
+	paths := planReplacement(source, "job9")
+	// No temp file — the promotion rename fails.
+
+	var claimed, released []string
+	mgr.OnOutputClaimed = func(p string) { claimed = append(claimed, p) }
+	mgr.OnOutputReleased = func(p string) { released = append(released, p) }
+
+	if err := mgr.reintegrate(&Job{ID: "job9"}, paths); err == nil {
+		t.Fatal("expected reintegrate to fail")
+	}
+	if len(claimed) != 1 || claimed[0] != paths.Final {
+		t.Errorf("claimed = %v, want [%s]", claimed, paths.Final)
+	}
+	if len(released) != 1 || released[0] != paths.Final {
+		t.Errorf("released = %v, want [%s]", released, paths.Final)
+	}
+}
+
 // cleanupTemp must only ever remove files it created.
 func TestCleanupTempRefusesRealFiles(t *testing.T) {
 	dir := t.TempDir()

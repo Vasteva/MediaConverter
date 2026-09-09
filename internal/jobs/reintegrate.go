@@ -101,16 +101,32 @@ func (m *Manager) reintegrate(job *Job, paths replacementPaths) error {
 		}
 	}
 
+	// The renames below surface paths.Final to the scanner's directory
+	// watcher. Claim it first so a watch event cannot queue a fresh optimise
+	// of this output before the job's completion hook records it. Released on
+	// any failure here; superseded by a durable entry once the job completes.
+	if m.OnOutputClaimed != nil {
+		m.OnOutputClaimed(paths.Final)
+	}
+	release := func() {
+		if m.OnOutputReleased != nil {
+			m.OnOutputReleased(paths.Final)
+		}
+	}
+
 	if err := os.Rename(paths.Source, holdingPath); err != nil {
+		release()
 		return fmt.Errorf("moving original to holding: %w", err)
 	}
 
 	if err := os.Rename(paths.Temp, paths.Final); err != nil {
 		// Put the original back so the library still has the title.
 		if restoreErr := os.Rename(holdingPath, paths.Source); restoreErr != nil {
+			release()
 			return fmt.Errorf("promoting transcode failed (%w), and restoring the original ALSO failed (%v) — "+
 				"the original is at %s", err, restoreErr, holdingPath)
 		}
+		release()
 		return fmt.Errorf("promoting transcode failed, original restored: %w", err)
 	}
 

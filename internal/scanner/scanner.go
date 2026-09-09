@@ -373,6 +373,24 @@ func (s *Scanner) CompleteProcessed(job *jobs.Job) {
 	}
 }
 
+// MarkOutputInFlight records a replace-in-place output path as in-flight
+// before the transcode is renamed into the library. Without this, the rename
+// fires a watcher event that reaches shouldProcessFile before CompleteProcessed
+// records the output, and a differently-named result (an .mp4 source becoming
+// an .mkv) gets queued for a second, pointless optimise of the job's own
+// output. Cleared by ReleaseOutput if the write fails; promoted to a durable
+// entry by CompleteProcessed on success.
+func (s *Scanner) MarkOutputInFlight(path string) {
+	s.processedDB.MarkInFlight(ProcessedFile{Path: path})
+}
+
+// ReleaseOutput undoes MarkOutputInFlight when the replace-in-place write
+// failed before a file existed at path. A no-op once the entry has been
+// promoted to a durable one.
+func (s *Scanner) ReleaseOutput(path string) {
+	s.processedDB.ClearInFlight(path)
+}
+
 // UpdateConfig updates the scanner configuration and restarts if necessary
 func (s *Scanner) UpdateConfig(newCfg *ScannerConfig) error {
 	newCfg.Validate()
