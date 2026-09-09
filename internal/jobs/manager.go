@@ -1176,6 +1176,22 @@ func (m *Manager) runExtraction(job *Job) error {
 	return nil
 }
 
+// completeAsSkip records that a source was deliberately not transcoded — it is
+// already an efficient encode, or already this pipeline's own output — and
+// leaves the job to finish as a successful no-op rather than a failure or a
+// retry.
+func (m *Manager) completeAsSkip(job *Job, reason string) {
+	log.Printf("[Job %s] %s", job.ID, reason)
+	m.appendAILog(job, AILog{
+		Timestamp: time.Now(),
+		Operation: "source_skipped",
+		Provider:  "System",
+		Detail:    reason,
+		Success:   true,
+	})
+	m.updateJob(job, func(j *Job) { j.StatusDetail = reason })
+}
+
 // runOptimizationFromPath transcodes sourcePath and returns whether the
 // output was verified — either by AI verification when it ran, or, when that
 // is unavailable, by the deterministic ValidateOutput gate alone — plus any
@@ -1239,15 +1255,7 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 	if err := media.CheckSourceSupported(info, cfg.DensityFloor); err != nil {
 		var skipErr *media.SkipEncodeError
 		if errors.As(err, &skipErr) {
-			log.Printf("[Job %s] %s", job.ID, skipErr.Reason)
-			m.appendAILog(job, AILog{
-				Timestamp: time.Now(),
-				Operation: "source_skipped",
-				Provider:  "System",
-				Detail:    skipErr.Reason,
-				Success:   true,
-			})
-			m.updateJob(job, func(j *Job) { j.StatusDetail = skipErr.Reason })
+			m.completeAsSkip(job, skipErr.Reason)
 			return false, nil
 		}
 		log.Printf("[Job %s] %v", job.ID, err)
@@ -1260,6 +1268,19 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 			Error:     err.Error(),
 		})
 		return false, err
+	}
+
+	// Skip a source that is itself a prior replace-in-place optimise of this
+	// same file: its original is retained in the holding directory and the
+	// file is already in this pipeline's target codec. Re-encoding it is
+	// generational loss, and reintegrate would then abort anyway — it refuses
+	// to overwrite the one retained copy of the original ("holding path ...
+	// already exists"), so the job burns a full encode only to fail. This is
+	// how a manually re-queued, already-optimised movie behaves once its
+	// processed.json entry is gone.
+	if reason := alreadyReplacedInPlaceReason(cfg, sourcePath, info); reason != "" {
+		m.completeAsSkip(job, reason)
+		return false, nil
 	}
 	if info.IsDolbyVision() {
 		log.Printf("[Job %s] Note: Dolby Vision profile %d — encoding the HDR10 base layer; "+

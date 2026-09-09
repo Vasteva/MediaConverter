@@ -117,6 +117,19 @@ func errorsAs(err error, target **SkipEncodeError) bool {
 	return ok
 }
 
+func TestIsHEVCOrAV1(t *testing.T) {
+	for _, c := range []string{"hevc", "h265", "HEVC", "av1", "AV1"} {
+		if !IsHEVCOrAV1(c) {
+			t.Errorf("IsHEVCOrAV1(%q) = false, want true", c)
+		}
+	}
+	for _, c := range []string{"h264", "avc", "mpeg4", "vp9", ""} {
+		if IsHEVCOrAV1(c) {
+			t.Errorf("IsHEVCOrAV1(%q) = true, want false", c)
+		}
+	}
+}
+
 // The size checks in ValidateOutput run before any ffprobe call, so they are
 // exercisable without FFmpeg present. These are the cases that let the eight
 // dead outputs through the old size>0 gate.

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Vasteva/MediaConverter/internal/config"
+	"github.com/Vasteva/MediaConverter/internal/media"
 )
 
 func TestPlanReplacement(t *testing.T) {
@@ -339,6 +340,39 @@ func TestReintegrateReleasesOutputWhenPromotionFails(t *testing.T) {
 	}
 	if len(released) != 1 || released[0] != paths.Final {
 		t.Errorf("released = %v, want [%s]", released, paths.Final)
+	}
+}
+
+// A source that is itself a prior replace-in-place output — already HEVC, with
+// its original retained in the holding dir — must be skipped, not re-encoded
+// only to die in reintegrate over the retained original.
+func TestAlreadyReplacedInPlaceReason(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{
+		SourceDir:      filepath.Join(dir, "library"),
+		HoldingDir:     filepath.Join(dir, "held"),
+		ReplaceInPlace: true,
+	}
+	source := filepath.Join(dir, "library", "movies", "Dolittle (2020)", "dolittle.mkv")
+	hevc := &media.MediaInfo{CodecName: "hevc"}
+
+	if r := alreadyReplacedInPlaceReason(cfg, source, hevc); r != "" {
+		t.Errorf("no retained original yet — expected no skip, got %q", r)
+	}
+
+	write(t, holdingPathFor(cfg.HoldingDir, cfg.SourceDir, source), "the h264 original")
+
+	if alreadyReplacedInPlaceReason(cfg, source, hevc) == "" {
+		t.Error("HEVC source with a retained original at its holding path should be skipped")
+	}
+	if r := alreadyReplacedInPlaceReason(cfg, source, &media.MediaInfo{CodecName: "h264"}); r != "" {
+		t.Errorf("a non-HEVC source must still run, got skip %q", r)
+	}
+
+	off := cfg
+	off.ReplaceInPlace = false
+	if r := alreadyReplacedInPlaceReason(off, source, hevc); r != "" {
+		t.Errorf("replace-in-place off — expected no skip, got %q", r)
 	}
 }
 
