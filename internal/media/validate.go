@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -281,6 +282,27 @@ func IsAlreadyEfficient(codec string, bitsPerPixel, floor float64) bool {
 // on their account.
 func ShouldRefuseCRFSuggestion(codec string, suggestedCRF, defaultCRF int) bool {
 	return isHEVCOrAV1(codec) && suggestedCRF < defaultCRF
+}
+
+// CheckSourceFile screens a source path before any probe is attempted. It
+// exists to catch the zero-byte case — a broken download, a truncated copy,
+// or a placeholder left by an external tool — which ffprobe otherwise rejects
+// with a bare "exit status 1" that says nothing useful.
+//
+// A stat error is deliberately not reported here: a missing or unreadable
+// file is left for the probe to surface exactly as it did before, so this
+// only ever adds the empty-file check and changes nothing else.
+func CheckSourceFile(path string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil
+	}
+	if fi.Size() == 0 {
+		return fmt.Errorf(
+			"source file is empty (0 bytes) — the input itself has no data, "+
+				"not a broken transcode (%s)", filepath.Base(path))
+	}
+	return nil
 }
 
 // CheckSourceSupported reports whether a source can be transcoded correctly

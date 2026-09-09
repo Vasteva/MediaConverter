@@ -1185,6 +1185,25 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 
 	log.Printf("[Job %s] Starting optimization: %s", job.ID, sourcePath)
 
+	// A zero-byte source — a broken download or a placeholder left by an
+	// external tool — makes ffprobe fail with a bare "exit status 1" that
+	// tells the operator nothing; catch it first with a message that does.
+	// This is a plain failure, not a skip: the file isn't done, and once it
+	// is actually populated a later scan retries it (the in-flight marker is
+	// cleared on failure, #48).
+	if err := media.CheckSourceFile(sourcePath); err != nil {
+		log.Printf("[Job %s] %v", job.ID, err)
+		m.appendAILog(job, AILog{
+			Timestamp: time.Now(),
+			Operation: "source_rejected",
+			Provider:  "System",
+			Detail:    err.Error(),
+			Success:   false,
+			Error:     err.Error(),
+		})
+		return false, err
+	}
+
 	// 1. Probe the source. Everything downstream — encoder profile, colour
 	// signalling, and the output validation gate — is derived from this.
 	info, err := m.ffmpeg.GetMediaInfo(job.ctx, sourcePath)

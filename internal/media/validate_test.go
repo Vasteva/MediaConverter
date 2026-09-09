@@ -34,6 +34,34 @@ func TestCheckSourceSupported(t *testing.T) {
 	}
 }
 
+// TestCheckSourceFile covers the zero-byte source case: a placeholder or a
+// broken download that ffprobe would otherwise reject with an opaque
+// "exit status 1".
+func TestCheckSourceFile(t *testing.T) {
+	dir := t.TempDir()
+
+	empty := filepath.Join(dir, "placeholder.mkv")
+	if err := os.WriteFile(empty, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckSourceFile(empty); err == nil {
+		t.Error("expected an error for a 0-byte source, got nil")
+	}
+
+	nonEmpty := filepath.Join(dir, "real.mkv")
+	if err := os.WriteFile(nonEmpty, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckSourceFile(nonEmpty); err != nil {
+		t.Errorf("expected no error for a non-empty source, got %v", err)
+	}
+
+	// A missing file is left for the probe to surface as it did before.
+	if err := CheckSourceFile(filepath.Join(dir, "gone.mkv")); err != nil {
+		t.Errorf("expected no error for a missing file, got %v", err)
+	}
+}
+
 // TestCheckSourceSupportedSkipsEfficientSources covers #39: an HEVC/AV1
 // source already at or below the density floor should be skipped, not
 // re-encoded — and reported as a *SkipEncodeError, distinct from a plain
