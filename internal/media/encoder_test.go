@@ -204,6 +204,56 @@ func TestNoStdinIsSet(t *testing.T) {
 	}
 }
 
+// TestSubtitleHandlingForMKVOutput covers the mov_text-into-MKV failure: an
+// MP4 source's tx3g subtitles cannot be copied into Matroska, and a blanket
+// "-c:s copy" aborts the whole transcode with "Could not write header".
+func TestSubtitleHandlingForMKVOutput(t *testing.T) {
+	base := TranscodeOptions{
+		InputPath:  "/input/test.mp4",
+		OutputPath: "/output/test.mkv",
+		GPUVendor:  GPUVendorCPU,
+		CRF:        23,
+	}
+
+	// mov_text must be converted; PGS alongside it must still be copied.
+	opts := base
+	opts.SubtitleCodecs = []string{"mov_text", "hdmv_pgs_subtitle"}
+	args := argString(newTestWrapper().buildFFmpegArgs(opts))
+	for _, want := range []string{"-c:s:0 srt", "-c:s:1 copy"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("expected %q\ngot: %s", want, args)
+		}
+	}
+	if strings.Contains(args, "-c:s copy") {
+		t.Errorf("blanket -c:s copy must not be emitted for a mov_text MKV output\ngot: %s", args)
+	}
+
+	// SRT/ASS are already Matroska-native — copy, don't needlessly re-encode.
+	opts.SubtitleCodecs = []string{"subrip", "ass"}
+	args = argString(newTestWrapper().buildFFmpegArgs(opts))
+	for _, want := range []string{"-c:s:0 copy", "-c:s:1 copy"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("expected %q\ngot: %s", want, args)
+		}
+	}
+
+	// Non-MKV output keeps the simple copy — MP4's own mov_text round-trips.
+	opts = base
+	opts.OutputPath = "/output/test.mp4"
+	opts.SubtitleCodecs = []string{"mov_text"}
+	args = argString(newTestWrapper().buildFFmpegArgs(opts))
+	if !strings.Contains(args, "-c:s copy") {
+		t.Errorf("non-MKV output should copy subtitles\ngot: %s", args)
+	}
+
+	// Unprobed source (no codec list) falls back to the historical behaviour.
+	opts = base
+	args = argString(newTestWrapper().buildFFmpegArgs(opts))
+	if !strings.Contains(args, "-c:s copy") {
+		t.Errorf("unknown subtitle codecs should fall back to -c:s copy\ngot: %s", args)
+	}
+}
+
 func TestBitDepthFromPixFmt(t *testing.T) {
 	cases := map[string]int{
 		"yuv420p":     8,
