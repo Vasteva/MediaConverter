@@ -26,6 +26,8 @@ import (
 func RegisterRoutes(app *fiber.App, jm *jobs.Manager, fs *scanner.Scanner, cfg *config.Config) {
 	if fs != nil {
 		jm.OnJobComplete = fs.CompleteProcessed
+		jm.OnOutputClaimed = fs.MarkOutputInFlight
+		jm.OnOutputReleased = fs.ReleaseOutput
 	}
 
 	// One store for every issued token — login sessions and short-lived SSE

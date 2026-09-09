@@ -157,8 +157,22 @@ type Manager struct {
 	ai            ai.Provider
 	OnJobComplete func(*Job)
 	OnJobUpdate   func(*Job)
-	jobsFilePath  string
-	loadErr       string // non-empty if jobs.json existed but could not be parsed
+
+	// OnOutputClaimed / OnOutputReleased bracket the moment a replace-in-place
+	// job's finished transcode is renamed into the library. The scanner wires
+	// these to mark that path in-flight before it appears on disk: the rename
+	// fires a filesystem event its directory watcher sees, and without the
+	// claim that event races the completion hook and queues a second optimise
+	// of the job's own output (the case that slips through is an .mp4/.avi
+	// source becoming a differently-named .mkv — a same-name .mkv overwrite is
+	// already covered by the source path's own entry). OnOutputReleased undoes
+	// the claim when the rename fails; a successful job's completion hook
+	// supersedes it with a durable entry.
+	OnOutputClaimed  func(path string)
+	OnOutputReleased func(path string)
+
+	jobsFilePath string
+	loadErr      string // non-empty if jobs.json existed but could not be parsed
 
 	// saveMu guards lastProgressSave, the throttle updateJobProgress uses to
 	// cap how often a high-frequency progress tick triggers a full Save() (#45).

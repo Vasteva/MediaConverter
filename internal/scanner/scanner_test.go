@@ -161,6 +161,59 @@ func TestFailedJobDoesNotPermanentlyExcludeFileFromScans(t *testing.T) {
 	}
 }
 
+// A replace-in-place transcode lands in a watched directory, firing a watch
+// event before the completion hook records the output. MarkOutputInFlight
+// makes that path ineligible immediately, so the scanner does not queue a
+// second optimise of its own output; ReleaseOutput reverses it when the
+// write never completed.
+func TestOutputInFlightMarkBlocksRequeueOfOwnOutput(t *testing.T) {
+	dir := t.TempDir()
+	sourceDir := filepath.Join(dir, "movies")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	output := filepath.Join(sourceDir, "Pressure (2026)", "pressure.mkv")
+	if err := os.MkdirAll(filepath.Dir(output), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(output, []byte("transcoded"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg := &config.Config{SourceDir: sourceDir, DestDir: filepath.Join(dir, "dest")}
+	jm, err := jobs.NewManager(cfg, nil, filepath.Join(dir, "jobs.json"))
+	if err != nil {
+		t.Fatalf("jobs.NewManager: %v", err)
+	}
+	scannerCfg := &ScannerConfig{
+		Mode:               ScanModeManual,
+		AutoCreateJobs:     true,
+		OptimizeExtensions: []string{".mkv"},
+		ProcessedFilePath:  filepath.Join(dir, "processed.json"),
+	}
+	scannerCfg.Validate()
+	s, err := NewScanner(scannerCfg, jm, filepath.Join(dir, "scanner_config.json"))
+	if err != nil {
+		t.Fatalf("NewScanner: %v", err)
+	}
+	t.Cleanup(s.Stop)
+
+	watchDir := WatchDirectory{Path: sourceDir}
+	if !s.shouldProcessFile(output, watchDir) {
+		t.Fatal("test setup: output should be eligible before it is claimed")
+	}
+
+	s.MarkOutputInFlight(output)
+	if s.shouldProcessFile(output, watchDir) {
+		t.Error("a claimed replace-in-place output was still queued for optimising")
+	}
+
+	s.ReleaseOutput(output)
+	if !s.shouldProcessFile(output, watchDir) {
+		t.Error("releasing an unwritten output left it permanently ineligible")
+	}
+}
+
 // TestCompletedJobPromotesInFlightEntryToDurable is the success-path
 // counterpart to TestFailedJobDoesNotPermanentlyExcludeFileFromScans: a job
 // that actually finishes must still leave the file durably marked processed,
