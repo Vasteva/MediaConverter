@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Vasteva/MediaConverter/internal/config"
+	"github.com/Vasteva/MediaConverter/internal/media"
 	"github.com/Vasteva/MediaConverter/internal/util"
 )
 
@@ -47,6 +49,37 @@ func planReplacement(sourcePath, jobID string) replacementPaths {
 		Final:  filepath.Join(dir, base+outputContainerExt),
 		Source: sourcePath,
 	}
+}
+
+// alreadyReplacedInPlaceReason returns a non-empty skip reason when sourcePath
+// is itself the output of a prior replace-in-place optimise of this same file:
+// replace-in-place is on, a retained original sits at sourcePath's holding
+// path, and the file is already in this pipeline's target codec. Re-optimising
+// such a file is generational loss, and reintegrate would abort on it anyway
+// rather than overwrite the retained original.
+//
+// The codec check keeps this to the common case. A source that is not HEVC/AV1
+// but still has a holding counterpart (e.g. a fresh non-HEVC download dropped
+// in under an identical release name) is left to run and, if it collides, to
+// hit reintegrate's own guard.
+func alreadyReplacedInPlaceReason(cfg config.Config, sourcePath string, info *media.MediaInfo) string {
+	if !cfg.ReplaceInPlace || cfg.HoldingDir == "" || info == nil {
+		return ""
+	}
+	if !media.IsHEVCOrAV1(info.CodecName) {
+		return ""
+	}
+	holding := holdingPathFor(cfg.HoldingDir, cfg.SourceDir, sourcePath)
+	if holding == sourcePath {
+		return ""
+	}
+	if _, err := os.Stat(holding); err != nil {
+		return ""
+	}
+	return fmt.Sprintf(
+		"source is already this pipeline's %s output — the original is retained at %s; "+
+			"re-encoding it is generational loss and cannot be reintegrated over the retained original (%s)",
+		strings.ToUpper(info.CodecName), holding, filepath.Base(sourcePath))
 }
 
 // holdingPathFor returns where a replaced original should be parked, preserving

@@ -246,9 +246,9 @@ type SkipEncodeError struct {
 
 func (e *SkipEncodeError) Error() string { return e.Reason }
 
-// isHEVCOrAV1 reports whether codec is one of the codecs this pipeline's own
+// IsHEVCOrAV1 reports whether codec is one of the codecs this pipeline's own
 // output uses — HEVC, or the comparably efficient AV1.
-func isHEVCOrAV1(codec string) bool {
+func IsHEVCOrAV1(codec string) bool {
 	switch strings.ToLower(codec) {
 	case "hevc", "h265", "av1":
 		return true
@@ -266,7 +266,7 @@ func isHEVCOrAV1(codec string) bool {
 // efficient codec, so this only ever applies to sources already in HEVC or
 // AV1 — the codecs this pipeline itself would produce.
 func IsAlreadyEfficient(codec string, bitsPerPixel, floor float64) bool {
-	return isHEVCOrAV1(codec) && bitsPerPixel > 0 && bitsPerPixel <= floor
+	return IsHEVCOrAV1(codec) && bitsPerPixel > 0 && bitsPerPixel <= floor
 }
 
 // ShouldRefuseCRFSuggestion reports whether an AI-suggested CRF should be
@@ -281,7 +281,7 @@ func IsAlreadyEfficient(codec string, bitsPerPixel, floor float64) bool {
 // AV1 stand to gain from the codec change alone, so no suggestion is refused
 // on their account.
 func ShouldRefuseCRFSuggestion(codec string, suggestedCRF, defaultCRF int) bool {
-	return isHEVCOrAV1(codec) && suggestedCRF < defaultCRF
+	return IsHEVCOrAV1(codec) && suggestedCRF < defaultCRF
 }
 
 // CheckSourceFile screens a source path before any probe is attempted. It
