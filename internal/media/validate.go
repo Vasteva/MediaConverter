@@ -309,6 +309,13 @@ func CheckSourceFile(path string) error {
 // with the current pipeline, returning a descriptive error when it cannot —
 // or a *SkipEncodeError when it can, but re-encoding it would not help.
 //
+// A source with no video stream cannot go through this pipeline at all: the
+// encoder command hard-codes "-map 0:V", so ffmpeg aborts with "Stream map
+// '0:V' matches no streams" (exit 234) after the job has already started.
+// This happens with mislabelled files — a raw DTS track or an audio-only
+// remux carrying a .mkv extension — which ffprobe parses far enough to
+// return a MediaInfo without erroring.
+//
 // Dolby Vision profile 5 has no HDR10 base layer. Re-encoding it discards the
 // RPU metadata that carries the colour transform, so the result plays back with
 // badly shifted colour — green casts and crushed highlights. Profiles 7 and 8
@@ -320,6 +327,11 @@ func CheckSourceFile(path string) error {
 func CheckSourceSupported(src *MediaInfo, densityFloor float64) error {
 	if src == nil {
 		return nil
+	}
+	if src.VideoStreams == 0 {
+		return fmt.Errorf(
+			"unsupported input: no video stream — the file is audio-only or "+
+				"not a media container despite its extension (%s)", src.Filename)
 	}
 	if src.DVProfile == 5 {
 		return fmt.Errorf(
