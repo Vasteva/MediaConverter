@@ -54,6 +54,11 @@ type TranscodeOptions struct {
 	SourceHeight int
 	SARNum       int
 	SARDen       int
+
+	// SubtitleCodecs is the ffprobe codec_name of each source subtitle stream,
+	// in stream order, used to choose a subtitle codec the output container can
+	// actually hold — see getSubtitleEncoderArgs.
+	SubtitleCodecs []string
 }
 
 // ApplySourceInfo fills the source-derived fields of opts from a probed
@@ -70,6 +75,7 @@ func (o *TranscodeOptions) ApplySourceInfo(info *MediaInfo) {
 	o.SourceHeight = info.VideoHeight
 	o.SARNum = info.SARNum
 	o.SARDen = info.SARDen
+	o.SubtitleCodecs = info.SubtitleCodecs
 }
 
 // FFmpegWrapper handles FFmpeg command execution
@@ -129,8 +135,9 @@ func (f *FFmpegWrapper) buildFFmpegArgs(opts TranscodeOptions) []string {
 	// Audio encoding
 	args = append(args, f.getAudioEncoderArgs(opts.AudioCodec)...)
 
-	// Subtitle handling (copy all)
-	args = append(args, "-c:s", "copy")
+	// Subtitle handling — copy where the output container allows it, convert
+	// where it doesn't (e.g. MP4's mov_text into an MKV).
+	args = append(args, f.getSubtitleEncoderArgs(opts)...)
 
 	// Map video (excluding attached pictures like cover art), audio, and subtitles.
 	// Capital V excludes streams with the ATTACHED_PIC disposition, which prevents
@@ -371,6 +378,58 @@ func (f *FFmpegWrapper) getAudioEncoderArgs(codec string) []string {
 	}
 }
 
+// subtitleNeedsConversionForMatroska reports whether a source subtitle codec
+// is text-based but not one Matroska can carry by a straight stream copy, so
+// it must be transcoded to SRT on the way in.
+//
+// mov_text (tx3g) is the case that matters in practice: it is the only
+// subtitle format MP4 carries, and copying it into Matroska fails with
+// "Subtitle codec ... is not supported" / "Could not write header", which
+// aborts the whole transcode. subrip/ass/ssa/webvtt are already Matroska-
+// native and image codecs (PGS, VobSub, DVB) have no text form — both are
+// left to copy.
+func subtitleNeedsConversionForMatroska(codec string) bool {
+	switch strings.ToLower(codec) {
+	case "mov_text", "text", "eia_608", "subviewer", "subviewer1", "mpl2", "pjs", "jacosub", "realtext", "vplayer", "stl":
+		return true
+	}
+	return false
+}
+
+// getSubtitleEncoderArgs decides how each subtitle stream is written to the
+// output. FFmpeg's blanket "-c:s copy" fails outright when a source subtitle
+// codec has no representation in the output container — most often an MP4
+// source's mov_text going into an MKV.
+//
+// Only Matroska output needs the special handling: image subtitles (PGS,
+// VobSub, DVB) are copied as-is, Matroska-native text (SRT/ASS/SSA/WebVTT) is
+// copied, and any other text codec is converted to SRT. Per-stream "-c:s:N"
+// specifiers line up with output subtitle order, which matches source order
+// because "-map 0:s?" maps them all in sequence.
+//
+// When the source subtitle codecs aren't known (empty slice — an unprobed
+// path), it falls back to the previous "-c:s copy" for the whole set rather
+// than guessing.
+func (f *FFmpegWrapper) getSubtitleEncoderArgs(opts TranscodeOptions) []string {
+	if !strings.EqualFold(filepath.Ext(opts.OutputPath), ".mkv") || len(opts.SubtitleCodecs) == 0 {
+		return []string{"-c:s", "copy"}
+	}
+
+	args := make([]string, 0, len(opts.SubtitleCodecs)*2)
+	for i, codec := range opts.SubtitleCodecs {
+		spec := fmt.Sprintf("-c:s:%d", i)
+		if subtitleNeedsConversionForMatroska(codec) {
+			args = append(args, spec, "srt")
+		} else {
+			// Image subtitles and formats already valid in Matroska: copy.
+			// Anything unrecognised also copies — Matroska is permissive, and
+			// this preserves the long-standing behaviour for those.
+			args = append(args, spec, "copy")
+		}
+	}
+	return args
+}
+
 // GetMediaInfo retrieves basic media information using ffprobe
 func (f *FFmpegWrapper) GetMediaInfo(ctx context.Context, path string) (*MediaInfo, error) {
 	if f.ffprobePath == "" {
@@ -486,6 +545,7 @@ func (f *FFmpegWrapper) GetMediaInfo(ctx context.Context, path string) (*MediaIn
 				info.AudioStreams++
 			case "subtitle":
 				info.SubtitleStreams++
+				info.SubtitleCodecs = append(info.SubtitleCodecs, s.CodecName)
 			}
 		}
 		return info, nil
@@ -537,6 +597,11 @@ type MediaInfo struct {
 	VideoStreams    int
 	AudioStreams    int
 	SubtitleStreams int
+
+	// SubtitleCodecs holds the ffprobe codec_name of each subtitle stream, in
+	// stream order. Used to pick a per-stream subtitle codec when the output
+	// container can't carry the source format as-is — see getSubtitleEncoderArgs.
+	SubtitleCodecs []string
 }
 
 // EncodingSummary renders the properties that matter when choosing an encoder
