@@ -16,10 +16,11 @@ func TestCheckSourceSupported(t *testing.T) {
 		wantError bool
 	}{
 		{"nil info", nil, false},
-		{"no dolby vision", &MediaInfo{DVProfile: 0}, false},
-		{"profile 5 has no HDR10 base layer", &MediaInfo{DVProfile: 5, Filename: "x.mkv"}, true},
-		{"profile 7 is backwards compatible", &MediaInfo{DVProfile: 7}, false},
-		{"profile 8 is backwards compatible", &MediaInfo{DVProfile: 8}, false},
+		{"no dolby vision", &MediaInfo{VideoStreams: 1, DVProfile: 0}, false},
+		{"profile 5 has no HDR10 base layer", &MediaInfo{VideoStreams: 1, DVProfile: 5, Filename: "x.mkv"}, true},
+		{"profile 7 is backwards compatible", &MediaInfo{VideoStreams: 1, DVProfile: 7}, false},
+		{"profile 8 is backwards compatible", &MediaInfo{VideoStreams: 1, DVProfile: 8}, false},
+		{"no video stream", &MediaInfo{VideoStreams: 0, AudioStreams: 1, Filename: "audio-only.mkv"}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -43,12 +44,13 @@ func TestCheckSourceSupportedSkipsEfficientSources(t *testing.T) {
 	// sized to land at roughly 0.04 bits/pixel — comfortably under the 0.06
 	// default floor.
 	efficient := &MediaInfo{
-		Filename:    "efficient.mkv",
-		CodecName:   "hevc",
-		Duration:    5400,
-		VideoWidth:  1920,
-		VideoHeight: 1080,
-		FrameRate:   24,
+		Filename:     "efficient.mkv",
+		CodecName:    "hevc",
+		Duration:     5400,
+		VideoWidth:   1920,
+		VideoHeight:  1080,
+		VideoStreams: 1,
+		FrameRate:    24,
 	}
 	efficient.Size = int64(0.04 * float64(efficient.VideoWidth*efficient.VideoHeight) *
 		efficient.FrameRate * efficient.Duration / 8)
