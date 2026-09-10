@@ -40,13 +40,25 @@ type replacementPaths struct {
 }
 
 // planReplacement computes the paths for replacing sourcePath in place.
-func planReplacement(sourcePath, jobID string) replacementPaths {
+//
+// finalBaseName is the name (without extension) the promoted file should take —
+// the AI-cleaned title when metadata cleaning renamed the job, so the library
+// ends up with "Dolittle (2020).mkv" rather than the release name it was
+// downloaded under. Empty falls back to the source's own base name, so a job
+// that was not renamed keeps the file where it was, only switching the
+// container to .mkv. It is always placed in the source's directory; any path
+// components in finalBaseName are stripped.
+func planReplacement(sourcePath, jobID, finalBaseName string) replacementPaths {
 	dir := filepath.Dir(sourcePath)
-	base := strings.TrimSuffix(filepath.Base(sourcePath), filepath.Ext(sourcePath))
+	if finalBaseName == "" {
+		finalBaseName = strings.TrimSuffix(filepath.Base(sourcePath), filepath.Ext(sourcePath))
+	} else {
+		finalBaseName = filepath.Base(finalBaseName)
+	}
 
 	return replacementPaths{
 		Temp:   filepath.Join(dir, TempFilePrefix+jobID+outputContainerExt),
-		Final:  filepath.Join(dir, base+outputContainerExt),
+		Final:  filepath.Join(dir, finalBaseName+outputContainerExt),
 		Source: sourcePath,
 	}
 }

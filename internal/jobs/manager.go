@@ -1365,6 +1365,7 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 
 	job.mu.RLock()
 	destPath := job.DestinationPath
+	aiRenamed := job.AICleaned
 	upscale := job.Upscale
 	resolution := job.Resolution
 	createSubtitles := job.CreateSubtitles
@@ -1379,7 +1380,15 @@ func (m *Manager) runOptimizationFromPath(job *Job, sourcePath string) (bool, er
 	replacing := cfg.ReplaceInPlace && cfg.HoldingDir != ""
 	var replacement replacementPaths
 	if replacing {
-		replacement = planReplacement(sourcePath, job.ID)
+		// Carry the AI-cleaned title into the library. Without this the
+		// promoted file keeps the source's release name — the rename metadata
+		// cleaning did was only ever reflected in job.DestinationPath, which
+		// replace-in-place otherwise ignores.
+		finalName := ""
+		if aiRenamed {
+			finalName = strings.TrimSuffix(filepath.Base(destPath), filepath.Ext(destPath))
+		}
+		replacement = planReplacement(sourcePath, job.ID, finalName)
 		destPath = replacement.Temp
 		defer m.cleanupTemp(job, replacement.Temp)
 		log.Printf("[Job %s] Replace-in-place: writing %s, will become %s",

@@ -11,13 +11,14 @@ import (
 
 func TestPlanReplacement(t *testing.T) {
 	cases := []struct {
-		name      string
-		source    string
-		wantFinal string
-		wantTemp  string
+		name          string
+		source        string
+		finalBaseName string
+		wantFinal     string
+		wantTemp      string
 	}{
 		{
-			name:      "mkv source keeps its name",
+			name:      "mkv source keeps its name when not renamed",
 			source:    "/storage/movies/Ant-Man (2015)/Ant-Man.2015.REMUX.mkv",
 			wantFinal: "/storage/movies/Ant-Man (2015)/Ant-Man.2015.REMUX.mkv",
 			wantTemp:  "/storage/movies/Ant-Man (2015)/" + TempFilePrefix + "job1.mkv",
@@ -25,16 +26,41 @@ func TestPlanReplacement(t *testing.T) {
 		{
 			// Container changes, so this is a retire-and-replace rather than an
 			// overwrite: the .avi leaves the library and a .mkv takes its place.
-			name:      "avi source becomes mkv",
+			name:      "avi source becomes mkv when not renamed",
 			source:    "/storage/movies/Old Film (1985)/old.avi",
 			wantFinal: "/storage/movies/Old Film (1985)/old.mkv",
 			wantTemp:  "/storage/movies/Old Film (1985)/" + TempFilePrefix + "job1.mkv",
+		},
+		{
+			// The AI-cleaned title lands in the library, in the source's own
+			// directory, regardless of the release name the file arrived under.
+			name:          "AI-cleaned title is used",
+			source:        "/storage/movies/Dolittle (2020)/Dolittle.2020.1080p.BluRay.x264-FuzerHD.mkv",
+			finalBaseName: "Dolittle (2020)",
+			wantFinal:     "/storage/movies/Dolittle (2020)/Dolittle (2020).mkv",
+			wantTemp:      "/storage/movies/Dolittle (2020)/" + TempFilePrefix + "job1.mkv",
+		},
+		{
+			// A dotted title (sequel year, decimal) must survive intact.
+			name:          "dotted AI title survives",
+			source:        "/storage/movies/9½ Weeks (1986)/9.5.Weeks.1986.mkv",
+			finalBaseName: "9.5 Weeks (1986)",
+			wantFinal:     "/storage/movies/9½ Weeks (1986)/9.5 Weeks (1986).mkv",
+			wantTemp:      "/storage/movies/9½ Weeks (1986)/" + TempFilePrefix + "job1.mkv",
+		},
+		{
+			// Defence: a stray separator in the name cannot move the output.
+			name:          "path components in the name are stripped",
+			source:        "/storage/movies/M (1931)/m.mkv",
+			finalBaseName: "../../etc/M (1931)",
+			wantFinal:     "/storage/movies/M (1931)/M (1931).mkv",
+			wantTemp:      "/storage/movies/M (1931)/" + TempFilePrefix + "job1.mkv",
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := planReplacement(tc.source, "job1")
+			got := planReplacement(tc.source, "job1", tc.finalBaseName)
 			if got.Final != tc.wantFinal {
 				t.Errorf("Final = %q, want %q", got.Final, tc.wantFinal)
 			}
@@ -101,7 +127,7 @@ func TestReintegrateSwapsFileAndRetainsOriginal(t *testing.T) {
 	source := filepath.Join(dir, "library", "movies", "Aliens (1986)", "aliens.mkv")
 	write(t, source, "original content")
 
-	paths := planReplacement(source, "job1")
+	paths := planReplacement(source, "job1", "")
 	write(t, paths.Temp, "transcoded content")
 
 	if err := mgr.reintegrate(&Job{ID: "job1"}, paths); err != nil {
@@ -143,7 +169,7 @@ func TestReintegrateRetiresDifferentContainer(t *testing.T) {
 	source := filepath.Join(dir, "library", "movies", "Old (1985)", "old.avi")
 	write(t, source, "original")
 
-	paths := planReplacement(source, "job2")
+	paths := planReplacement(source, "job2", "")
 	write(t, paths.Temp, "transcoded")
 
 	if err := mgr.reintegrate(&Job{ID: "job2"}, paths); err != nil {
@@ -167,7 +193,7 @@ func TestReintegrateRestoresOriginalWhenPromotionFails(t *testing.T) {
 	source := filepath.Join(dir, "library", "movies", "Alpha (2018)", "alpha.mkv")
 	write(t, source, "original content")
 
-	paths := planReplacement(source, "job3")
+	paths := planReplacement(source, "job3", "")
 	// Deliberately do NOT create the temp file, so the promotion rename fails.
 
 	err := mgr.reintegrate(&Job{ID: "job3"}, paths)
@@ -199,7 +225,7 @@ func TestReintegrateRefusesToOverwriteHeldOriginal(t *testing.T) {
 	write(t, source, "second original")
 	write(t, filepath.Join(dir, "held", "movies", "Aliens (1986)", "aliens.mkv"), "first original")
 
-	paths := planReplacement(source, "job4")
+	paths := planReplacement(source, "job4", "")
 	write(t, paths.Temp, "transcoded")
 
 	if err := mgr.reintegrate(&Job{ID: "job4"}, paths); err == nil {
@@ -232,7 +258,7 @@ func TestReintegrateRefusesToOverwriteUnrelatedFinalFile(t *testing.T) {
 	unrelatedFinal := filepath.Join(dir, "library", "movies", "Old (1985)", "old.mkv")
 	write(t, unrelatedFinal, "unrelated pre-existing file")
 
-	paths := planReplacement(source, "job6")
+	paths := planReplacement(source, "job6", "")
 	write(t, paths.Temp, "transcoded")
 
 	if err := mgr.reintegrate(&Job{ID: "job6"}, paths); err == nil {
@@ -264,7 +290,7 @@ func TestReintegrateAllowsSameContainerSelfReplacement(t *testing.T) {
 	source := filepath.Join(dir, "library", "movies", "Same (2020)", "same.mkv")
 	write(t, source, "original")
 
-	paths := planReplacement(source, "job7")
+	paths := planReplacement(source, "job7", "")
 	if paths.Final != paths.Source {
 		t.Fatalf("test assumption broken: Final (%s) != Source (%s)", paths.Final, paths.Source)
 	}
@@ -294,7 +320,7 @@ func TestReintegrateClaimsOutputBeforeItAppears(t *testing.T) {
 
 	source := filepath.Join(dir, "library", "movies", "Pressure (2026)", "pressure.mp4")
 	write(t, source, "original")
-	paths := planReplacement(source, "job8")
+	paths := planReplacement(source, "job8", "")
 	write(t, paths.Temp, "transcoded")
 
 	var claimed, released []string
@@ -325,7 +351,7 @@ func TestReintegrateReleasesOutputWhenPromotionFails(t *testing.T) {
 
 	source := filepath.Join(dir, "library", "movies", "Alpha (2018)", "alpha.mkv")
 	write(t, source, "original")
-	paths := planReplacement(source, "job9")
+	paths := planReplacement(source, "job9", "")
 	// No temp file — the promotion rename fails.
 
 	var claimed, released []string
